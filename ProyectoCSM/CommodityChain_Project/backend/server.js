@@ -1,22 +1,64 @@
 require('dotenv').config();
 const express = require('express');
 const { ethers } = require('ethers');
-const { Pool } = require('pg');
 const app = express();
 
-app.use(express.json());
-app.use((req, res, next) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  next();
-});
+const dbType = process.env.DB_TYPE?.toLowerCase() || (process.env.DATABASE_URL?.startsWith('mysql') ? 'mysql' : 'postgres');
+const isMysql = dbType === 'mysql';
+const isPostgres = dbType === 'postgres';
 
-const pool = process.env.DATABASE_URL
-  ? new Pool({ connectionString: process.env.DATABASE_URL })
-  : null;
+let pool = null;
+
+const initDb = () => {
+  const connectionString = process.env.DATABASE_URL || process.env.MYSQL_URL || process.env.MYSQL_DATABASE_URL;
+
+  if (isMysql && !connectionString && process.env.MYSQL_HOST) {
+    const mysql = require('mysql2/promise');
+    pool = mysql.createPool({
+      host: process.env.MYSQL_HOST,
+      port: process.env.MYSQL_PORT ? Number(process.env.MYSQL_PORT) : 3306,
+      user: process.env.MYSQL_USER,
+      password: process.env.MYSQL_PASSWORD,
+      database: process.env.MYSQL_DATABASE,
+      waitForConnections: true,
+      connectionLimit: 10,
+      queueLimit: 0,
+    });
+    return;
+  }
+
+  if (!connectionString) {
+    return;
+  }
+
+  if (isMysql) {
+    const mysql = require('mysql2/promise');
+    pool = mysql.createPool(connectionString);
+  } else {
+    const { Pool } = require('pg');
+    pool = new Pool({ connectionString });
+  }
+};
+
+initDb();
 
 const useDb = Boolean(pool);
+
+const param = (index) => (isPostgres ? `$${index}` : '?');
+
+const dbQuery = async (sql, params = []) => {
+  if (!useDb) {
+    throw new Error('No database configured');
+  }
+
+  if (isPostgres) {
+    const result = await pool.query(sql, params);
+    return result.rows;
+  }
+
+  const [rows] = await pool.execute(sql, params);
+  return rows;
+};
 
 const provider = new ethers.JsonRpcProvider(process.env.RPC_URL || 'http://localhost:8545');
 const contractAddress = process.env.CONTRACT_ADDRESS;
@@ -156,8 +198,8 @@ app.get('/api/batches', async (req, res) => {
   }
 
   try {
-    const result = await pool.query('SELECT id, blockchain_id, status, buyer_wallet, seller_wallet, escrow_value, last_tx_hash, description, created_at FROM batches ORDER BY created_at DESC');
-    return res.json(result.rows);
+    const rows = await dbQuery('SELECT id, blockchain_id, status, buyer_wallet, seller_wallet, escrow_value, last_tx_hash, description, created_at FROM batches ORDER BY created_at DESC');
+    return res.json(rows);
   } catch (error) {
     console.error('Error fetching batches:', error);
     return res.status(500).json({ error: 'Error al leer batches desde la base de datos.' });
@@ -172,11 +214,14 @@ app.get('/api/batches/:id', async (req, res) => {
   }
 
   try {
-    const result = await pool.query('SELECT id, blockchain_id, status, buyer_wallet, seller_wallet, escrow_value, last_tx_hash, description, created_at FROM batches WHERE id = $1 LIMIT 1', [id]);
-    if (result.rows.length === 0) {
+    const rows = await dbQuery(
+      `SELECT id, blockchain_id, status, buyer_wallet, seller_wallet, escrow_value, last_tx_hash, description, created_at FROM batches WHERE id = ${param(1)} LIMIT 1`,
+      [id]
+    );
+    if (rows.length === 0) {
       return res.status(404).json({ error: 'Batch no encontrado.' });
     }
-    return res.json(result.rows[0]);
+    return res.json(rows[0]);
   } catch (error) {
     console.error('Error fetching batch by id:', error);
     return res.status(500).json({ error: 'Error al leer batch desde la base de datos.' });
@@ -201,14 +246,24 @@ app.patch('/api/batches/:id', async (req, res) => {
   }
 
   try {
-    const result = await pool.query(
-      'UPDATE batches SET status = $1 WHERE id = $2 RETURNING id, blockchain_id, status, buyer_wallet, seller_wallet, escrow_value, last_tx_hash, description, created_at',
-      [status, id]
+    const existing = await dbQuery(
+      `SELECT id FROM batches WHERE id = ${param(1)} LIMIT 1`,
+      [id]
     );
-    if (result.rows.length === 0) {
+    if (existing.length === 0) {
       return res.status(404).json({ error: 'Batch no encontrado.' });
     }
-    return res.json(result.rows[0]);
+
+    await dbQuery(
+      `UPDATE batches SET status = ${param(1)} WHERE id = ${param(2)}`,
+      [status, id]
+    );
+
+    const rows = await dbQuery(
+      `SELECT id, blockchain_id, status, buyer_wallet, seller_wallet, escrow_value, last_tx_hash, description, created_at FROM batches WHERE id = ${param(1)} LIMIT 1`,
+      [id]
+    );
+    return res.json(rows[0]);
   } catch (error) {
     console.error('Error updating batch status:', error);
     return res.status(500).json({ error: 'Error al actualizar el estado del batch.' });
@@ -224,11 +279,11 @@ app.get('/api/batch_documents', async (req, res) => {
 
   try {
     const query = batch_id
-      ? 'SELECT id, batch_id, ipfs_hash, doc_type, uploaded_at FROM batch_documents WHERE batch_id = $1 ORDER BY uploaded_at DESC'
+      ? `SELECT id, batch_id, ipfs_hash, doc_type, uploaded_at FROM batch_documents WHERE batch_id = ${param(1)} ORDER BY uploaded_at DESC`
       : 'SELECT id, batch_id, ipfs_hash, doc_type, uploaded_at FROM batch_documents ORDER BY uploaded_at DESC';
     const params = batch_id ? [batch_id] : [];
-    const result = await pool.query(query, params);
-    return res.json(result.rows);
+    const rows = await dbQuery(query, params);
+    return res.json(rows);
   } catch (error) {
     console.error('Error fetching batch documents:', error);
     return res.status(500).json({ error: 'Error al leer batch_documents desde la base de datos.' });
@@ -246,14 +301,14 @@ app.get('/api/sensor_logs', async (req, res) => {
       SELECT sl.value, sl.timestamp
       FROM sensor_logs sl
       JOIN sensors s ON sl.sensor_id = s.id
-      ${batch_id ? 'WHERE s.batch_id = $1' : ''}
+      ${batch_id ? `WHERE s.batch_id = ${param(1)}` : ''}
       ORDER BY sl.timestamp ASC
     `;
     const params = batch_id ? [batch_id] : [];
-    const result = await pool.query(query, params);
-    const data = result.rows.map((row) => ({
+    const rows = await dbQuery(query, params);
+    const data = rows.map((row) => ({
       value: Number(row.value),
-      timestamp: row.timestamp.toISOString(),
+      timestamp: row.timestamp instanceof Date ? row.timestamp.toISOString() : row.timestamp,
     }));
     return res.json(data);
   } catch (error) {
@@ -276,8 +331,8 @@ app.get('/api/batch_events', async (req, res) => {
       ORDER BY created_at ASC
     `;
     const params = batch_id ? [batch_id] : [];
-    const result = await pool.query(query, params);
-    return res.json(normalizeBatchEvents(result.rows));
+    const rows = await dbQuery(query, params);
+    return res.json(normalizeBatchEvents(rows));
   } catch (error) {
     console.error('Error fetching batch events:', error);
     return res.status(500).json({ error: 'Error al leer batch_events desde la base de datos.' });

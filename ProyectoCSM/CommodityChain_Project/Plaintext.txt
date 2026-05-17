@@ -1,0 +1,18 @@
+/CommodityChain_Project
+│
+├── /contracts            # Smart Contracts (Solidity)
+│   └── CommodityEscrow.sol
+│
+├── /backend              # Servidor de Indexación (Node.js)
+│   ├── server.js
+│   ├── db_schema.sql     # Esquema de base de datos que diseñamos
+│   └── .env              # Variables de entorno
+│
+├── /frontend             # Interfaz de Usuario (React)
+│   ├── /src
+│   │   ├── /components   # Mapa, Timeline, Gráficos
+│   │   ├── App.js        # Lógica principal de navegación
+│   │   └── dashboard.js  # Vista del Dashboard
+│   └── package.json
+│
+└── README.md             # Instrucciones de despliegue

@@ -1,0 +1,22 @@
+Mapa de Navegación (Arquitectura de la App)
+Este mapa describe cómo el usuario se desplaza por la aplicación:
+
+Página de Aterrizaje (Landing/Login): Conexión de Wallet (Metamask).
+
+Dashboard Principal (Vista Global):
+
+Buscador de Lotes: Filtros por estado (Tránsito, Entregado, Disputa).
+
+Resumen de Activos: Valor total en Escrow y lotes activos.
+
+Vista Detallada del Lote (Single Batch View):
+
+Pestaña Trazabilidad: Mapa interactivo y línea de tiempo (Timeline).
+
+Pestaña Documentación: Visor de archivos en IPFS y certificados.
+
+Pestaña Telemetría: Gráficos de sensores (IoT) en tiempo real.
+
+Panel de Acciones: Botones de "Liberar Pago", "Abrir Disputa" o "Subir Certificado".
+
+Panel de Administración / Configuración: Gestión de roles y registro de nuevos sensores.

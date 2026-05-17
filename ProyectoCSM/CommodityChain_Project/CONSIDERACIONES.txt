@@ -1,0 +1,31 @@
+CONSIDERACIONES
+
+
+Este código incluye la integración con la billetera (Metamask) y la estructura para visualizar el mapa y los datos del Smart Contract.
+
+1. Instalación de Dependencias
+En tu carpeta /frontend, ejecuta:
+
+Bash
+npm install ethers lucide-react recharts leaflet react-leaflet
+
+
+Mapa de Navegación Visual (Flujo de la App)
+Para que el usuario no se pierda, la navegación sigue este flujo lógico:
+
+Login/Connect: El usuario "desbloquea" la app con su llave privada.
+
+Vista de Inventario: Lista de todos los commodities asociados a su wallet.
+
+Ficha Técnica (Dashboard Arriba): El usuario hace clic en un lote y entra a la vista detallada (el código que te pasé).
+
+Verificación Externa: Si el usuario hace clic en el ID de la blockchain, el sistema lo redirige al explorador de bloques para transparencia total.
+
+Resumen de tu Carpeta de Proyecto Final:
+/contracts: Tiene la lógica del dinero y las reglas (Solidity).
+
+/backend: Conecta la Blockchain con tu base de datos SQL.
+
+/frontend: Es la interfaz que acabamos de escribir, donde el usuario ve los gráficos, mapas y botones de acción.
+
+Nota técnica: Para que el mapa funcione con datos reales, deberás configurar el componente react-leaflet usando las coordenadas que el backend reciba de los sensores GPS.

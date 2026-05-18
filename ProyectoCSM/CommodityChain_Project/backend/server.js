@@ -97,9 +97,106 @@ if (contractAddress && process.env.CONTRACT_ABI) {
   contract = new ethers.Contract(contractAddress, contractAbi, provider);
 }
 
+const { v4: uuidv4 } = require('uuid');
+
 if (contract) {
-  contract.on('BatchCreated', (id, buyer, price) => {
-    console.log(`Nuevo lote detectado: ${id}`);
+  console.log('Sincronización Blockchain activa: Escuchando eventos para MySQL...');
+
+  contract.on('BatchCreated', async (...args) => {
+    try {
+      const event = args[args.length - 1];
+      const txHash = event?.log?.transactionHash || '0x0000000000000000000000000000000000000000000000000000000000000000';
+
+      let id = null;
+      let buyer = '0x0000000000000000000000000000000000000000';
+      let price = 0n;
+
+      if (event && event.args) {
+        id = event.args.id || event.args.batchId || event.args[0];
+        buyer = event.args.buyer || event.args.buyerWallet || event.args[1];
+        price = event.args.price || event.args.escrowValue || event.args[2];
+      } else {
+        id = args[0];
+        buyer = args[1];
+        price = args[2];
+      }
+
+      const cleanId = id !== undefined && id !== null ? Number(id) : Math.floor(Math.random() * 10000);
+      const cleanBuyer = buyer ? String(buyer) : '0x0000000000000000000000000000000000000000';
+      
+      // SOLUCIÓN: Definir una wallet para el Vendedor (Seller) ya que tu esquema SQL la exige.
+      // Si tu evento en el futuro incluye un vendedor (ej: event.args.seller), lo usamos. 
+      // Si no, usamos una wallet genérica del sistema temporalmente para que no falle MySQL.
+      const cleanSeller = event?.args?.seller || event?.args?.sellerWallet || '0x1111111111111111111111111111111111111111';
+
+      let formattedPrice = '0.00';
+      try {
+        if (price !== undefined && price !== null) {
+          formattedPrice = ethers.formatEther(price);
+        }
+      } catch (e) {
+        console.log('No se pudo formatear el precio, usando 0.00');
+      }
+
+      console.log(`[Blockchain] Evento detectado limpiado -> ID: ${cleanId}, Buyer: ${cleanBuyer}, Seller: ${cleanSeller}, Price: ${formattedPrice}`);
+
+      if (!useDb) {
+        console.log('Advertencia: Base de datos MySQL no configurada.');
+        return;
+      }
+
+      // PASO 1: Registrar Comprador en la tabla users
+      const queryUserBuyer = `
+        INSERT IGNORE INTO users (wallet_address, username, role, created_at) 
+        VALUES (?, ?, ?, NOW())
+      `;
+      await dbQuery(queryUserBuyer, [cleanBuyer, `Comprador_${cleanBuyer.substring(2, 8)}`, 'Comprador']);
+
+      // PASO 2: Registrar Vendedor en la tabla users (Obligatorio por Foreign Key del esquema SQL)
+      const queryUserSeller = `
+        INSERT IGNORE INTO users (wallet_address, username, role, created_at) 
+        VALUES (?, ?, ?, NOW())
+      `;
+      await dbQuery(queryUserSeller, [cleanSeller, `Proveedor_${cleanSeller.substring(2, 8)}`, 'Proveedor']);
+
+      // PASO 3: Preparar identificador único de la tabla
+      const sqlBatchId = uuidv4(); 
+
+      // PASO 4: Insertar el lote incluyendo la columna 'seller_wallet' que faltaba
+      const queryBatch = `
+        INSERT INTO batches (id, blockchain_id, status, buyer_wallet, seller_wallet, escrow_value, description, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
+      `;
+      await dbQuery(queryBatch, [
+        sqlBatchId,
+        cleanId,         
+        'Tránsito',         
+        cleanBuyer,       
+        cleanSeller, // <--- Aquí añadimos el parámetro requerido que MySQL estaba reclamando
+        formattedPrice,     
+        `Lote creado automáticamente desde Blockchain. Tx: ${txHash}`
+      ]);
+
+      // PASO 5: Registrar el hito en la tabla 'batch_events'
+      const queryEvent = `
+        INSERT INTO batch_events (id, batch_id, event_name, location_name, latitude, longitude, tx_hash, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
+      `;
+      await dbQuery(queryEvent, [
+        uuidv4(),           
+        sqlBatchId,         
+        'Origen de carga',  
+        'Blockchain Node',  
+        -34.6037,           
+        -58.3816,           
+        txHash              
+      ]);
+
+      console.log(`[MySQL] ¡Éxito! Lote ${cleanId} indexado correctamente con UUID: ${sqlBatchId}`);
+
+    } catch (error) {
+      console.error('⚠️ Error al intentar persistir el evento en MySQL:', error);
+    }
   });
 }
 

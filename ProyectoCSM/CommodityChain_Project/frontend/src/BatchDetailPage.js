@@ -95,17 +95,22 @@ const fallbackSensorData = [
 const ESCROW_CONTRACT_ADDRESS = '0xAaBbCcDdEeFf0011223344556677889900aAbBc';
 const ESCROW_CONTRACT_ABI = [
   {
-    name: 'releasePayment',
+    name: 'liberarPago',
     type: 'function',
     stateMutability: 'nonpayable',
-    inputs: [],
+    inputs: [
+      { internalType: 'uint256', name: 'batchId', type: 'uint256' },
+    ],
     outputs: [],
   },
   {
-    name: 'openDispute',
+    name: 'abrirDisputa',
     type: 'function',
     stateMutability: 'nonpayable',
-    inputs: [],
+    inputs: [
+      { internalType: 'uint256', name: 'batchId', type: 'uint256' },
+      { internalType: 'string', name: 'reason', type: 'string' },
+    ],
     outputs: [],
   },
 ];
@@ -124,16 +129,18 @@ const BatchDetailPage = () => {
   const [sensorData, setSensorData] = useState([]);
   const [activeTab, setActiveTab] = useState('traceability');
   const [actionMessage, setActionMessage] = useState('');
+  const [contractMessage, setContractMessage] = useState('');
+  const [contractLoading, setContractLoading] = useState(false);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const loadBatchDetail = async () => {
       try {
         const [batchRes, eventsRes, docsRes, logsRes] = await Promise.all([
-          fetch(`http://localhost:3001/api/batches/${id}`),
-          fetch(`http://localhost:3001/api/batch_events?batch_id=${id}`),
-          fetch(`http://localhost:3001/api/batch_documents?batch_id=${id}`),
-          fetch(`http://localhost:3001/api/sensor_logs?batch_id=${id}`),
+          fetch(`/api/batches/${id}`),
+          fetch(`/api/batch_events?batch_id=${id}`),
+          fetch(`/api/batch_documents?batch_id=${id}`),
+          fetch(`/api/sensor_logs?batch_id=${id}`),
         ]);
 
         if (!batchRes.ok) throw new Error('Batch no encontrado.');
@@ -164,28 +171,48 @@ const BatchDetailPage = () => {
 
   const handleReleasePayment = async () => {
     try {
+      const batchId = Number(selectedBatch.id);
+      if (!batchId || Number.isNaN(batchId)) {
+        throw new Error('Batch ID inválido para la transacción.');
+      }
+
       const contract = getContractInstance(ESCROW_CONTRACT_ADDRESS, ESCROW_CONTRACT_ABI);
-      if (!contract?.releasePayment) {
+      if (!contract?.liberarPago) {
         throw new Error('Contrato no disponible');
       }
-      await contract.releasePayment();
-      setActionMessage('Liberación de pago ejecutada.');
+
+      const tx = await contract.liberarPago(batchId);
+      await tx.wait();
+      setActionMessage('Pago liberado correctamente en la blockchain.');
     } catch (err) {
-      setActionMessage('Error al liberar el pago. Conecta tu wallet y verifica el contrato.');
+      setActionMessage(err?.message || 'Error al liberar el pago. Conecta tu wallet y verifica el contrato.');
     }
   };
 
   const handleOpenDispute = async () => {
     try {
-      await fetch(`http://localhost:3001/api/batches/${id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: 'Disputa' }),
-      });
-      setActionMessage('Estado del lote actualizado a Disputa.');
+      const batchId = Number(selectedBatch.id);
+      if (!batchId || Number.isNaN(batchId)) {
+        throw new Error('Batch ID inválido para la disputa.');
+      }
+
+      const reason = window.prompt('Describe brevemente el motivo de la disputa:', 'Disputa de calidad');
+      if (!reason) {
+        throw new Error('Se necesita un motivo para abrir la disputa.');
+      }
+
+      const contract = getContractInstance(ESCROW_CONTRACT_ADDRESS, ESCROW_CONTRACT_ABI);
+      if (!contract?.abrirDisputa) {
+        throw new Error('Contrato no disponible');
+      }
+
+      const tx = await contract.abrirDisputa(batchId, reason);
+      await tx.wait();
+
+      setActionMessage('Disputa abierta correctamente en la blockchain.');
       setBatch((current) => ({ ...current, status: 'Disputa' }));
     } catch (err) {
-      setActionMessage('Error actualizando el estado.');
+      setActionMessage(err?.message || 'Error al abrir la disputa. Conecta tu wallet y verifica el contrato.');
     }
   };
 
@@ -202,7 +229,50 @@ const BatchDetailPage = () => {
     setActionMessage(`Certificado subido: QmFakeHash${file.name.slice(0, 4)}`);
   };
 
+  const handleDownloadContract = async () => {
+    setContractLoading(true);
+    setContractMessage('');
+    try {
+      const body = {
+        batchId: selectedBatch.id,
+        buyerWallet: selectedBatch.buyer_wallet,
+        sellerWallet: selectedBatch.seller_wallet,
+        arbiterWallet: contractArbiterWallet,
+        amountLocked: selectedBatch.escrow_value,
+        status: selectedBatch.status,
+        tx_hash: selectedBatch.last_tx_hash,
+      };
+
+      const response = await fetch('/api/contracts/generate-pdf', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+      if (!response.ok) {
+        throw new Error('No se pudo generar el contrato.');
+      }
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `Contrato_Escrow_${selectedBatch.id}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+
+      setContractMessage('Contrato descargado correctamente.');
+    } catch (err) {
+      setContractMessage(err.message || 'Error al generar el contrato.');
+    } finally {
+      setContractLoading(false);
+    }
+  };
+
   const selectedBatch = batch || fallbackBatch;
+  const contractArbiterWallet = selectedBatch.arbiter_wallet || '0x0000000000000000000000000000000000000000';
 
   const statusClass = batchStatusClasses[selectedBatch.status] || 'bg-slate-700 text-slate-100 border-slate-600';
 
@@ -392,6 +462,14 @@ const BatchDetailPage = () => {
           </button>
           <button
             type="button"
+            onClick={handleDownloadContract}
+            disabled={contractLoading}
+            className="inline-flex w-full items-center justify-center gap-2 rounded-3xl border border-cyan-500 bg-slate-950 px-4 py-3 text-sm font-semibold text-cyan-300 transition hover:bg-cyan-500/10 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <FileText className="h-5 w-5" /> {contractLoading ? 'Generando contrato...' : 'Descargar Contrato'}
+          </button>
+          <button
+            type="button"
             onClick={handleUploadCertificate}
             className="inline-flex w-full items-center justify-center gap-2 rounded-3xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm font-semibold text-slate-200 transition hover:border-cyan-500"
           >
@@ -402,6 +480,9 @@ const BatchDetailPage = () => {
           <div className="rounded-3xl border border-slate-800 bg-slate-950 p-4 text-sm text-slate-400">
             <p className="font-semibold text-slate-100">Estado de acción</p>
             <p className="mt-3 min-h-[60px]">{actionMessage || 'Selecciona una acción para ver el estado aquí.'}</p>
+            {contractMessage && (
+              <p className="mt-3 text-sm text-cyan-300">{contractMessage}</p>
+            )}
           </div>
 
           {!userAddress && (

@@ -52,8 +52,8 @@ const Dashboard = () => {
     const loadDashboardData = async () => {
       try {
         const [telemetryRes, eventsRes] = await Promise.all([
-          fetch('http://localhost:3001/api/sensor_logs'),
-          fetch('http://localhost:3001/api/batch_events'),
+          fetch('/api/sensor_logs'),
+          fetch('/api/batch_events'),
         ]);
 
         if (!telemetryRes.ok || !eventsRes.ok) {

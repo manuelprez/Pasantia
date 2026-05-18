@@ -1,9 +1,14 @@
 require('dotenv').config();
 const express = require('express');
+const PDFDocument = require('pdfkit');
 const { ethers } = require('ethers');
 const app = express();
+app.use(express.json());
 
-const dbType = process.env.DB_TYPE?.toLowerCase() || (process.env.DATABASE_URL?.startsWith('mysql') ? 'mysql' : 'postgres');
+const dbType = process.env.DB_TYPE?.toLowerCase()
+  || (process.env.DATABASE_URL?.startsWith('mysql') ? 'mysql'
+  : process.env.MYSQL_HOST || process.env.MYSQL_URL || process.env.MYSQL_DATABASE_URL ? 'mysql'
+  : 'postgres');
 const isMysql = dbType === 'mysql';
 const isPostgres = dbType === 'postgres';
 
@@ -44,6 +49,29 @@ initDb();
 
 const useDb = Boolean(pool);
 
+if (useDb) {
+  console.log(`Database configured: ${dbType.toUpperCase()}`);
+} else {
+  console.log('Database not configured. Usando datos simulados.');
+}
+
+const validateDbConnection = async () => {
+  if (!useDb) return;
+  try {
+    if (isPostgres) {
+      await pool.query('SELECT 1');
+    } else {
+      await pool.execute('SELECT 1');
+    }
+    console.log('Database connection validated successfully.');
+  } catch (error) {
+    console.error('Database validation failed:', error.message || error);
+  }
+};
+
+validateDbConnection();
+
+// Retorna el placeholder correcto según el motor ($1, $2 para Postgres, ? para MySQL)
 const param = (index) => (isPostgres ? `$${index}` : '?');
 
 const dbQuery = async (sql, params = []) => {
@@ -72,10 +100,10 @@ if (contractAddress && process.env.CONTRACT_ABI) {
 if (contract) {
   contract.on('BatchCreated', (id, buyer, price) => {
     console.log(`Nuevo lote detectado: ${id}`);
-    // Aquí insertarías en la base de datos SQL que diseñamos
   });
 }
 
+// --- FALLBACK DATA ---
 const fallbackSensorLogs = [
   { timestamp: '2026-05-15T10:00:00Z', value: 5.2 },
   { timestamp: '2026-05-15T12:00:00Z', value: 5.8 },
@@ -128,28 +156,6 @@ const fallbackBatches = [
     description: 'Contenedor de café verde con certificación orgánica',
     created_at: '2026-05-10T08:00:00Z',
   },
-  {
-    id: 'batch-02',
-    blockchain_id: 102,
-    status: 'Entregado',
-    buyer_wallet: '0xBcd234...ef0',
-    seller_wallet: '0xEfg567...bcd',
-    escrow_value: '32000.50',
-    last_tx_hash: '0xjkl456...789',
-    description: 'Carga de repuestos electrónicos con seguro de transporte',
-    created_at: '2026-05-11T10:30:00Z',
-  },
-  {
-    id: 'batch-03',
-    blockchain_id: 103,
-    status: 'Disputa',
-    buyer_wallet: '0xCde345...f01',
-    seller_wallet: '0xFgh678...cde',
-    escrow_value: '21500.75',
-    last_tx_hash: '0xmno789...123',
-    description: 'Envío de vinos premium con control de temperatura',
-    created_at: '2026-05-12T12:15:00Z',
-  },
 ];
 
 const fallbackDocuments = [
@@ -160,27 +166,13 @@ const fallbackDocuments = [
     doc_type: 'Certificado',
     uploaded_at: '2026-05-12T14:20:00Z',
   },
-  {
-    id: 'doc-02',
-    batch_id: 'batch-01',
-    ipfs_hash: 'QmRkX3...def',
-    doc_type: 'Factura',
-    uploaded_at: '2026-05-13T09:10:00Z',
-  },
-  {
-    id: 'doc-03',
-    batch_id: 'batch-03',
-    ipfs_hash: 'QmYpW7...xyz',
-    doc_type: 'Guía',
-    uploaded_at: '2026-05-14T11:05:00Z',
-  },
 ];
 
 const normalizeBatchEvents = (rows) => {
   const events = rows.map((row) => ({
     eventName: row.event_name,
     location_name: row.location_name,
-    timestamp: row.created_at,
+    timestamp: row.created_at, // Asegúrate de que apunte a la columna devuelta por la BD
     tx_hash: row.tx_hash,
     latitude: Number(row.latitude),
     longitude: Number(row.longitude),
@@ -192,11 +184,10 @@ const normalizeBatchEvents = (rows) => {
   });
 };
 
-app.get('/api/batches', async (req, res) => {
-  if (!useDb) {
-    return res.json(fallbackBatches);
-  }
+// --- ENDPOINTS ---
 
+app.get('/api/batches', async (req, res) => {
+  if (!useDb) return res.json(fallbackBatches);
   try {
     const rows = await dbQuery('SELECT id, blockchain_id, status, buyer_wallet, seller_wallet, escrow_value, last_tx_hash, description, created_at FROM batches ORDER BY created_at DESC');
     return res.json(rows);
@@ -214,6 +205,7 @@ app.get('/api/batches/:id', async (req, res) => {
   }
 
   try {
+    // CORREGIDO: Uso correcto de marcadores parametrizados dinámicos
     const rows = await dbQuery(
       `SELECT id, blockchain_id, status, buyer_wallet, seller_wallet, escrow_value, last_tx_hash, description, created_at FROM batches WHERE id = ${param(1)} LIMIT 1`,
       [id]
@@ -232,37 +224,26 @@ app.patch('/api/batches/:id', async (req, res) => {
   const { id } = req.params;
   const { status } = req.body;
 
-  if (!status) {
-    return res.status(400).json({ error: 'Se requiere el campo status.' });
-  }
+  if (!status) return res.status(400).json({ error: 'Se requiere el campo status.' });
 
   if (!useDb) {
     const batchIndex = fallbackBatches.findIndex((item) => item.id === id);
-    if (batchIndex === -1) {
-      return res.status(404).json({ error: 'Batch no encontrado.' });
-    }
+    if (batchIndex === -1) return res.status(404).json({ error: 'Batch no encontrado.' });
     fallbackBatches[batchIndex].status = status;
     return res.json(fallbackBatches[batchIndex]);
   }
 
   try {
-    const existing = await dbQuery(
-      `SELECT id FROM batches WHERE id = ${param(1)} LIMIT 1`,
-      [id]
-    );
-    if (existing.length === 0) {
-      return res.status(404).json({ error: 'Batch no encontrado.' });
-    }
+    const existing = await dbQuery(`SELECT id FROM batches WHERE id = ${param(1)} LIMIT 1`, [id]);
+    if (existing.length === 0) return res.status(404).json({ error: 'Batch no encontrado.' });
 
+    // CORREGIDO: Orden posicional estricto de parámetros (? , ?) o ($1, $2)
     await dbQuery(
       `UPDATE batches SET status = ${param(1)} WHERE id = ${param(2)}`,
       [status, id]
     );
 
-    const rows = await dbQuery(
-      `SELECT id, blockchain_id, status, buyer_wallet, seller_wallet, escrow_value, last_tx_hash, description, created_at FROM batches WHERE id = ${param(1)} LIMIT 1`,
-      [id]
-    );
+    const rows = await dbQuery(`SELECT id, blockchain_id, status, buyer_wallet, seller_wallet, escrow_value, last_tx_hash, description, created_at FROM batches WHERE id = ${param(1)} LIMIT 1`, [id]);
     return res.json(rows[0]);
   } catch (error) {
     console.error('Error updating batch status:', error);
@@ -291,9 +272,7 @@ app.get('/api/batch_documents', async (req, res) => {
 });
 
 app.get('/api/sensor_logs', async (req, res) => {
-  if (!useDb) {
-    return res.json(fallbackSensorLogs);
-  }
+  if (!useDb) return res.json(fallbackSensorLogs);
 
   try {
     const { batch_id } = req.query;
@@ -317,17 +296,131 @@ app.get('/api/sensor_logs', async (req, res) => {
   }
 });
 
-app.get('/api/batch_events', async (req, res) => {
-  if (!useDb) {
-    return res.json(fallbackBatchEvents);
+app.post('/api/contracts/generate-pdf', async (req, res) => {
+  const {
+    batchId,
+    buyerWallet,
+    sellerWallet,
+    arbiterWallet,
+    amountLocked,
+    status,
+    tx_hash,
+    projectName = 'CommodityChain - Sistema de Trazabilidad de Lotes',
+  } = req.body;
+
+  if (!batchId || !buyerWallet || !sellerWallet || !arbiterWallet || !amountLocked || !status || !tx_hash) {
+    return res.status(400).json({ error: 'Faltan parámetros requeridos para generar el PDF.' });
   }
 
+  let batchData = { batchId, buyerWallet, sellerWallet, arbiterWallet, amountLocked, status, tx_hash };
+
+  if (useDb) {
+    try {
+      const rows = await dbQuery(
+        `SELECT id, buyer_wallet, seller_wallet, status, escrow_value, last_tx_hash FROM batches WHERE id = ${param(1)} LIMIT 1`,
+        [batchId]
+      );
+      if (rows.length > 0) {
+        batchData = {
+          batchId: rows[0].id,
+          buyerWallet: rows[0].buyer_wallet || buyerWallet,
+          sellerWallet: rows[0].seller_wallet || sellerWallet,
+          arbiterWallet,
+          amountLocked: rows[0].escrow_value || amountLocked,
+          status: rows[0].status || status,
+          tx_hash: rows[0].last_tx_hash || tx_hash,
+        };
+      }
+    } catch (error) {
+      console.error('Error reading batch data for PDF generation:', error);
+    }
+  }
+
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="Contrato_Escrow_${batchData.batchId}.pdf"`);
+
+  const doc = new PDFDocument({ size: 'A4', margins: { top: 50, bottom: 50, left: 50, right: 50 } });
+  doc.pipe(res);
+
+  doc.fillColor('#0B2545').fontSize(18).font('Helvetica-Bold').text(projectName, { align: 'center' });
+  doc.moveDown(0.3);
+  doc.fillColor('#555555').fontSize(11).font('Helvetica').text('Contrato de custodia escueta entre las partes involucradas en el batch registrado en blockchain.', { align: 'center' });
+  doc.moveDown(1);
+  doc.strokeColor('#CCCCCC').lineWidth(1).moveTo(50, doc.y).lineTo(545, doc.y).stroke();
+  doc.moveDown(1);
+
+  doc.fontSize(12).fillColor('#1a1a1a').font('Helvetica-Bold').text('Resumen del Acuerdo');
+  doc.moveDown(0.5);
+
+  const tableRows = [
+    ['Batch ID', String(batchData.batchId)],
+    ['Estado del Acuerdo', String(batchData.status)],
+    ['Monto Bloqueado', String(batchData.amountLocked)],
+    ['Wallet Comprador', String(batchData.buyerWallet)],
+    ['Wallet Vendedor', String(batchData.sellerWallet)],
+    ['Wallet Árbitro', String(batchData.arbiterWallet)],
+    ['Hash de Transacción', String(batchData.tx_hash)],
+  ];
+
+  const labelX = 60;
+  const valueX = 220;
+  tableRows.forEach(([label, value]) => {
+    doc.font('Helvetica-Bold').fillColor('#0B2545').fontSize(10).text(label, labelX, doc.y, { continued: true });
+    doc.font('Helvetica').fillColor('#333333').text(value, valueX, doc.y);
+    doc.moveDown(0.8);
+  });
+
+  doc.moveDown(1);
+  doc.fillColor('#0B2545').font('Helvetica-Bold').fontSize(12).text('Cláusulas del Acuerdo');
+  doc.moveDown(0.5);
+
+  const clauses = [
+    '1. Objeto: El presente contrato de custodia asegura el pago del comprador al vendedor asociado al lote indicado y anclado en la blockchain.',
+    '2. Depósito: El comprador debe ejecutar depositarFondos() para bloquear el monto en el contrato antes de liberar el pago.',
+    '3. Liberación: El pago puede liberarse mediante liberarPago() por el comprador o el árbitro autorizado una vez verificado el cumplimiento.',
+    '4. Disputa: Si existe desacuerdo, cualquiera de las partes puede abrirDisputa() para activar la intervención del árbitro.',
+    '5. Autenticidad: El hash de transacción registrado es la prueba inmutable de la operación y constará como sello de autenticidad.',
+  ];
+
+  doc.font('Helvetica').fontSize(10).fillColor('#333333');
+  clauses.forEach((clause) => doc.text(clause, { align: 'justify', paragraphGap: 6 }));
+
+  doc.moveDown(1);
+  doc.fillColor('#0B2545').font('Helvetica-Bold').text('Declaración de las Partes');
+  doc.moveDown(0.4);
+  doc.font('Helvetica').fontSize(10).fillColor('#333333').text('Las partes declaran haber leído y comprendido los términos descritos en este documento.', { align: 'justify' });
+
+  doc.moveDown(1.2);
+  const signatureY = doc.y;
+  const signatureWidth = 150;
+  const signatureGap = 40;
+
+  doc.font('Helvetica-Bold').fontSize(10).fillColor('#0B2545').text('Comprador', labelX, signatureY);
+  doc.font('Helvetica').fontSize(9).fillColor('#333333').text(batchData.buyerWallet, labelX, doc.y, { width: signatureWidth });
+
+  doc.font('Helvetica-Bold').fontSize(10).fillColor('#0B2545').text('Vendedor', labelX + signatureWidth + signatureGap, signatureY);
+  doc.font('Helvetica').fontSize(9).fillColor('#333333').text(batchData.sellerWallet, labelX + signatureWidth + signatureGap, doc.y, { width: signatureWidth });
+
+  doc.moveDown(2);
+  doc.font('Helvetica-Bold').fontSize(10).fillColor('#0B2545').text('Árbitro', labelX);
+  doc.font('Helvetica').fontSize(9).fillColor('#333333').text(batchData.arbiterWallet, labelX, doc.y, { width: signatureWidth });
+
+  doc.moveDown(1.5);
+  doc.rect(50, doc.y, 500, 60).fillOpacity(0.05).fill('#0B2545');
+  doc.fillOpacity(1).font('Helvetica-Bold').fontSize(10).fillColor('#0B2545').text('Sello de Autenticidad (Hash de Transacción)', 55, doc.y + 8);
+  doc.font('Helvetica').fontSize(10).fillColor('#333333').text(batchData.tx_hash, 55, doc.y + 25);
+
+  doc.end();
+});
+
+app.get('/api/batch_events', async (req, res) => {
+  if (!useDb) return res.json(fallbackBatchEvents);
   try {
     const { batch_id } = req.query;
     const query = `
       SELECT event_name, location_name, latitude, longitude, tx_hash, created_at
       FROM batch_events
-      ${batch_id ? 'WHERE batch_id = $1' : ''}
+      ${batch_id ? `WHERE batch_id = ${param(1)}` : ''}
       ORDER BY created_at ASC
     `;
     const params = batch_id ? [batch_id] : [];
@@ -336,6 +429,21 @@ app.get('/api/batch_events', async (req, res) => {
   } catch (error) {
     console.error('Error fetching batch events:', error);
     return res.status(500).json({ error: 'Error al leer batch_events desde la base de datos.' });
+  }
+});
+
+app.get('/api/db-status', async (req, res) => {
+  if (!useDb) return res.json({ status: 'no-db', message: 'Base de datos no configurada.' });
+  try {
+    if (isPostgres) {
+      await pool.query('SELECT 1');
+    } else {
+      await pool.execute('SELECT 1');
+    }
+    return res.json({ status: 'ok', dbType: dbType, message: 'Conexión a la base de datos OK.' });
+  } catch (error) {
+    console.error('DB status error:', error);
+    return res.status(500).json({ status: 'error', dbType: dbType, message: 'No se pudo conectar a la base de datos.' });
   }
 });
 

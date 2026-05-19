@@ -1,7 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  Box, Filter, MapPin, AlertTriangle, CheckCircle2,
-  Truck, Zap, Package, Menu, DollarSign, ShieldCheck, Thermometer
+  Box, Filter, Search, Sparkles, MapPin, Clock, FileText, Activity,
+  Shield, Settings, ChevronRight, AlertTriangle, CheckCircle2,
+  Truck, Upload, DollarSign, X, Menu, Bell, User, Thermometer,
+  Droplets, Wind, Zap, Package, Lock, Unlock, Plus, RefreshCw,
+  Download, Eye, Hash, BarChart3, Globe, Cpu, ChevronDown, Circle, ShieldCheck
 } from 'lucide-react';
 
 import useWeb3 from './hooks/useWeb3';
@@ -90,9 +93,20 @@ function Card({ children, className = '' }) {
   return <div className={`rounded-2xl border border-slate-800 bg-slate-900 ${className}`}>{children}</div>;
 }
 
-// ─── COMPONENTE COMPLETO ─────────────────────────────────────────────────────
+function SectionTitle({ children, sub }) {
+  return (
+    <div className="mb-6">
+      <p className="text-[11px] uppercase tracking-[0.3em] text-slate-500">{sub}</p>
+      <h2 className="mt-1 text-xl font-semibold text-white">{children}</h2>
+    </div>
+  );
+}
+
+// ─── COMPONENTE PRINCIPAL UNIFICADO ──────────────────────────────────────────
 export default function DashboardPage() {
-  const { userAddress, error: web3Error, connectWallet, getContractInstance } = useWeb3();
+  // Integración Web3 real desde tu custom hook original
+  const { userAddress, signer, error: web3Error, connectWallet, getContractInstance } = useWeb3();
+  const navigate = useNavigate();
 
   const [view, setView] = useState('dashboard'); 
   const [selectedBatch, setSelectedBatch] = useState(null);
@@ -257,6 +271,19 @@ export default function DashboardPage() {
                 {view === 'batch' && selectedBatch ? `Detalles del lote: ${selectedBatch.id}` : 'Mesa de Control Geral'}
               </h1>
             </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => {
+                onLogout?.();
+                navigate('/', { replace: true });
+              }}
+              className="inline-flex items-center gap-2 rounded-full border border-slate-800 bg-slate-900 px-3 py-2 text-xs font-semibold text-slate-200 transition hover:bg-slate-800 hover:text-white"
+            >
+              <LogOut className="h-4 w-4" />
+              Cerrar sesión
+            </button>
           </div>
         </header>
 

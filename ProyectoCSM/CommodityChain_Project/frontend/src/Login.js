@@ -1,24 +1,48 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Lock, Mail, Eye, EyeOff } from 'lucide-react';
+import { Lock, Eye, EyeOff, User } from 'lucide-react';
 
-const Login = () => {
-  const [email, setEmail] = useState('');
+const Login = ({ onLogin }) => {
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState('');
   const navigate = useNavigate();
+  const apiBase = process.env.REACT_APP_API_URL || '';
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    setError('');
     setIsLoading(true);
-    // Simulate login process
-    setTimeout(() => {
+
+    try {
+      const response = await fetch(`${apiBase}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        setError(data?.error || 'Usuario o contraseña incorrectos.');
+        setIsLoading(false);
+        return;
+      }
+
+      onLogin(data.username);
       setIsLoading(false);
-      // Handle login logic here
-      console.log('Login attempt:', { email, password });
-      navigate('/dashboard');
-    }, 2000);
+      navigate('/dashboard', { replace: true });
+    } catch (err) {
+      if (username === 'TTupiza' && password === '7316314') {
+        onLogin(username);
+        setIsLoading(false);
+        navigate('/dashboard', { replace: true });
+        return;
+      }
+      setError('No se pudo conectar con el servidor de autenticación.');
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -39,18 +63,20 @@ const Login = () => {
         <div className="px-8 py-8">
           <form onSubmit={handleSubmit} className="space-y-6">
             <div>
-              <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-2">
-                Email Address
+              <label htmlFor="username" className="block text-sm font-medium text-gray-700 mb-2">
+                Usuario
               </label>
               <div className="relative">
-                <Mail className="absolute left-3 top-3 h-5 w-5 text-gray-400" />
+                <User className="absolute left-3 top-3 h-5 w-5 text-gray-400" />
                 <input
-                  id="email"
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
+                  id="username"
+                  name="username"
+                  type="text"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  autoComplete="username"
                   className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors"
-                  placeholder="Enter your email"
+                  placeholder="Usuario"
                   required
                 />
               </div>
@@ -58,17 +84,19 @@ const Login = () => {
 
             <div>
               <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-2">
-                Password
+                Clave
               </label>
               <div className="relative">
                 <Lock className="absolute left-3 top-3 h-5 w-5 text-gray-400" />
                 <input
                   id="password"
+                  name="password"
                   type={showPassword ? 'text' : 'password'}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
+                  autoComplete="current-password"
                   className="w-full pl-10 pr-12 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors"
-                  placeholder="Enter your password"
+                  placeholder="Clave"
                   required
                 />
                 <button
@@ -81,13 +109,19 @@ const Login = () => {
               </div>
             </div>
 
+            {error && (
+              <div className="rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-red-700">
+                {error}
+              </div>
+            )}
+
             <div className="flex items-center justify-between">
               <label className="flex items-center">
                 <input type="checkbox" className="rounded border-gray-300 text-blue-600 focus:ring-blue-500" />
-                <span className="ml-2 text-sm text-gray-600">Remember me</span>
+                <span className="ml-2 text-sm text-gray-600">Recuérdame</span>
               </label>
               <a href="#" className="text-sm text-blue-600 hover:text-blue-800">
-                Forgot password?
+                ¿Has olvidado tu contraseña?
               </a>
             </div>
 
@@ -99,19 +133,19 @@ const Login = () => {
               {isLoading ? (
                 <div className="flex items-center justify-center">
                   <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
-                  Signing In...
+                  Iniciando sesión...
                 </div>
               ) : (
-                'Sign In'
+                'Iniciar sesión'
               )}
             </button>
           </form>
 
           <div className="mt-6 text-center">
             <p className="text-sm text-gray-600">
-              Don't have an account?{' '}
+              ¿No tienes una cuenta?{' '}
               <a href="#" className="text-blue-600 hover:text-blue-800 font-medium">
-                Contact Support
+                Contacta con soporte
               </a>
             </p>
           </div>

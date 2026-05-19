@@ -1,10 +1,12 @@
+import { useNavigate } from 'react-router-dom';
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Box, Filter, Search, Sparkles, MapPin, Clock, FileText, Activity,
   Shield, Settings, ChevronRight, AlertTriangle, CheckCircle2,
   Truck, Upload, DollarSign, X, Menu, Bell, User, Thermometer,
   Droplets, Wind, Zap, Package, Lock, Unlock, Plus, RefreshCw,
-  Download, Eye, Hash, BarChart3, Globe, Cpu, ChevronDown, Circle, ShieldCheck
+  Download, Eye, Hash, BarChart3, Globe, Cpu, ChevronDown, Circle, ShieldCheck,
+  LogOut // <-- CORREGIDO: Importación agregada correctamente
 } from 'lucide-react';
 
 import useWeb3 from './hooks/useWeb3';
@@ -145,6 +147,13 @@ export default function DashboardPage() {
     loadDashboardData();
   }, []);
 
+  // ─── LOGIC DE CIERRE DE SESIÓN ─────────────────────────────────────────────
+  const onLogout = () => {
+    // CORREGIDO: Definición segura de la función para limpiar autenticación local
+    localStorage.removeItem('user'); 
+    sessionStorage.clear();
+  };
+
   // ─── INTERACCIONES SMART CONTRACT REALES ───────────────────────────────────
   const handleReleasePayment = async () => {
     if (!userAddress) {
@@ -185,7 +194,7 @@ export default function DashboardPage() {
     setContractMessage('Abriendo disputa en el contrato de depósito...');
     try {
       const contract = getContractInstance(ESCROW_CONTRACT_ADDRESS, ESCROW_CONTRACT_ABI);
-      const reason = `Métricas IoT comprometidas en el lote ${selectedBatch.id}`;
+      const reason = `Métricas IoT compromised en el lote ${selectedBatch.id}`;
       const tx = await contract.abrirDisputa(selectedBatch.blockchain_id, reason);
       setContractMessage('Transacción en proceso... Esperando validación...');
       await tx.wait();
@@ -268,7 +277,7 @@ export default function DashboardPage() {
             <div>
               <p className="text-[10px] font-semibold uppercase tracking-wider text-cyan-500">SISTEMA</p>
               <h1 className="text-base font-semibold text-white">
-                {view === 'batch' && selectedBatch ? `Detalles del lote: ${selectedBatch.id}` : 'Mesa de Control Geral'}
+                {view === 'batch' && selectedBatch ? `Detalles del lote: ${selectedBatch.id}` : 'Mesa de Control General'}
               </h1>
             </div>
           </div>
@@ -276,7 +285,7 @@ export default function DashboardPage() {
             <button
               type="button"
               onClick={() => {
-                onLogout?.();
+                onLogout(); // <-- CORREGIDO: Ejecución nativa sin condicionales que rompan la compilación
                 navigate('/', { replace: true });
               }}
               className="inline-flex items-center gap-2 rounded-full border border-slate-800 bg-slate-900 px-3 py-2 text-xs font-semibold text-slate-200 transition hover:bg-slate-800 hover:text-white"

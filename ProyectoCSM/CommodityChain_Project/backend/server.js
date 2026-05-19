@@ -78,44 +78,6 @@ const validateDbConnection = async () => {
 
 validateDbConnection();
 
-const AUTH_USERNAME = 'TTupiza';
-const AUTH_PASSWORD = '7316314';
-const AUTH_USER_ROLE = 'Admin';
-
-const ensureAuthTableAndUser = async () => {
-  if (!useDb) return;
-
-  try {
-    const createTableSql = isMysql
-      ? `CREATE TABLE IF NOT EXISTS auth_users (
-          username VARCHAR(50) NOT NULL PRIMARY KEY,
-          password VARCHAR(128) NOT NULL,
-          role VARCHAR(20) NOT NULL,
-          created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-        )`
-      : `CREATE TABLE IF NOT EXISTS auth_users (
-          username VARCHAR(50) PRIMARY KEY,
-          password VARCHAR(128) NOT NULL,
-          role VARCHAR(20) NOT NULL CHECK (role IN ('Admin', 'Proveedor', 'Comprador')),
-          created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-        )`;
-
-    await dbQuery(createTableSql);
-
-    const insertSql = isMysql
-      ? `INSERT INTO auth_users (username, password, role, created_at) VALUES (?, ?, ?, NOW()) ON DUPLICATE KEY UPDATE password = VALUES(password), role = VALUES(role)`
-      : `INSERT INTO auth_users (username, password, role, created_at) VALUES ($1, $2, $3, NOW()) ON CONFLICT (username) DO UPDATE SET password = EXCLUDED.password, role = EXCLUDED.role`;
-
-    await dbQuery(insertSql, [AUTH_USERNAME, AUTH_PASSWORD, AUTH_USER_ROLE]);
-  } catch (error) {
-    console.error('Error creating auth_users table or user:', error.message || error);
-  }
-};
-
-if (useDb) {
-  ensureAuthTableAndUser().catch((error) => console.error('Auth setup error:', error));
-}
-
 // Retorna el placeholder correcto según el motor ($1, $2 para Postgres, ? para MySQL)
 const param = (index) => (isPostgres ? `$${index}` : '?');
 
@@ -595,36 +557,6 @@ app.get('/api/batch_events', async (req, res) => {
     console.error('Error fetching batch events:', error);
     // Devolvemos un array vacío como salvavidas para que el frontend no falle
     return res.status(500).json([]); 
-  }
-});
-
-app.post('/api/auth/login', async (req, res) => {
-  const { username, password } = req.body;
-  if (!username || !password) {
-    return res.status(400).json({ error: 'Se requiere usuario y contraseña.' });
-  }
-
-  if (!useDb) {
-    if (username === AUTH_USERNAME && password === AUTH_PASSWORD) {
-      return res.json({ success: true, username: AUTH_USERNAME, role: AUTH_USER_ROLE });
-    }
-    return res.status(401).json({ error: 'Usuario o contraseña incorrectos.' });
-  }
-
-  try {
-    const rows = await dbQuery(
-      `SELECT username, password, role FROM auth_users WHERE username = ${param(1)} LIMIT 1`,
-      [username]
-    );
-
-    if (rows.length === 0 || rows[0].password !== password) {
-      return res.status(401).json({ error: 'Usuario o contraseña incorrectos.' });
-    }
-
-    return res.json({ success: true, username: rows[0].username, role: rows[0].role });
-  } catch (error) {
-    console.error('Error en login:', error.message || error);
-    return res.status(500).json({ error: 'Error interno al autenticar.' });
   }
 });
 

@@ -5,7 +5,7 @@ import {
   Shield, Settings, ChevronRight, AlertTriangle, CheckCircle2,
   Truck, Upload, DollarSign, X, Menu, Bell, User, Thermometer,
   Droplets, Wind, Zap, Package, Lock, Unlock, Plus, RefreshCw,
-  Download, Eye, Hash, BarChart3, Globe, Cpu, ChevronDown, Circle, ShieldCheck
+  Download, Eye, Hash, BarChart3, Globe, Cpu, ChevronDown, Circle, ShieldCheck, LogOut
 } from 'lucide-react';
 
 // Importación de tus hooks y gráficos reales del Dashboard anterior
@@ -98,7 +98,7 @@ function SectionTitle({ children, sub }) {
 }
 
 // ─── COMPONENTE PRINCIPAL UNIFICADO ──────────────────────────────────────────
-export default function DashboardPage() {
+export default function DashboardPage({ onLogout }) {
   // Integración Web3 real desde tu custom hook original
   const { userAddress, signer, error: web3Error, connectWallet, getContractInstance } = useWeb3();
   const navigate = useNavigate();
@@ -259,6 +259,19 @@ export default function DashboardPage() {
                 {view === 'batch' && selectedBatch ? selectedBatch.description.slice(0, 45) + '...' : view === 'admin' ? 'Administración' : 'Dashboard de Lotes'}
               </h1>
             </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => {
+                onLogout?.();
+                navigate('/', { replace: true });
+              }}
+              className="inline-flex items-center gap-2 rounded-full border border-slate-800 bg-slate-900 px-3 py-2 text-xs font-semibold text-slate-200 transition hover:bg-slate-800 hover:text-white"
+            >
+              <LogOut className="h-4 w-4" />
+              Cerrar sesión
+            </button>
           </div>
         </header>
 

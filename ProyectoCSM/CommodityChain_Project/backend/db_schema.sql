@@ -5,6 +5,13 @@ CREATE TABLE users (
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE auth_users (
+    username VARCHAR(50) NOT NULL PRIMARY KEY,
+    password VARCHAR(128) NOT NULL,
+    role VARCHAR(20) NOT NULL CHECK (role IN ('Admin', 'Proveedor', 'Comprador')),
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE batches (
     id CHAR(36) NOT NULL PRIMARY KEY,
     blockchain_id INT NOT NULL UNIQUE,

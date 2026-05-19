@@ -11,6 +11,7 @@ import {
   AlertTriangle,
   Clock3,
   ExternalLink,
+  LogOut,
 } from 'lucide-react';
 import useWeb3 from './hooks/useWeb3';
 import BatchRouteMap from './BatchRouteMap';
@@ -117,7 +118,7 @@ const ESCROW_CONTRACT_ABI = [
 
 const classNames = (...classes) => classes.filter(Boolean).join(' ');
 
-const BatchDetailPage = () => {
+const BatchDetailPage = ({ onLogout }) => {
   const { id } = useParams();
   const navigate = useNavigate();
   const fileInputRef = useRef(null);
@@ -305,6 +306,18 @@ const BatchDetailPage = () => {
           </button>
           <h1 className="mt-4 text-3xl font-semibold">Detalle del Lote</h1>
           <p className="mt-2 text-slate-400 max-w-2xl">Visualiza trazabilidad, documentación e indicadores IoT del lote seleccionado.</p>
+        </div>
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => {
+              onLogout?.();
+              navigate('/', { replace: true });
+            }}
+            className="inline-flex items-center gap-2 rounded-full border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200 hover:bg-slate-800"
+          >
+            <LogOut className="h-4 w-4" /> Cerrar sesión
+          </button>
         </div>
         <div className="space-y-2 text-right">
           <div className={classNames('inline-flex items-center gap-2 rounded-full border px-4 py-2 text-sm', statusClass)}>

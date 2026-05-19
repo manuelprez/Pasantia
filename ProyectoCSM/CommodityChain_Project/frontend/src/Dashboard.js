@@ -1,54 +1,58 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { MapPin, Thermometer, ShieldCheck, Box } from 'lucide-react';
+import { MapPin, Thermometer, Box } from 'lucide-react';
 import useWeb3 from './hooks/useWeb3';
 import BatchTelemetryChart from './BatchTelemetryChart';
 import BatchRouteMap from './BatchRouteMap';
+                                 
+const ESCROW_CONTRACT_ADDRESS = '0xf8e81D47203A594245E36C48e151709F0C19fBe8';
+const ESCROW_CONTRACT_ABI = [
+  {
+    "inputs": [
+      { "internalType": "uint256", "name": "batchId", "type": "uint256" }
+    ],
+    "name": "liberarPago",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      { "internalType": "uint256", "name": "batchId", "type": "uint256" },
+      { "internalType": "string", "name": "reason", "type": "string" }
+    ],
+    "name": "abrirDisputa",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  }
+];
 
-// Datos simulados de telemetría (sensor_logs)
 const defaultSensorData = [
   { timestamp: '2026-05-15T10:00:00Z', value: 5.2 },
   { timestamp: '2026-05-15T12:00:00Z', value: 5.8 },
   { timestamp: '2026-05-15T14:00:00Z', value: 6.5 },
-  { timestamp: '2026-05-15T16:00:00Z', value: 5.9 },
+  { timestamp: '2026-05-15T16:00:00Z', value: 5.9 }
 ];
 
 const defaultBatchEvents = [
-  {
-    eventName: 'Origen de carga',
-    timestamp: '2026-05-14T08:30:00Z',
-    tx_hash: '0xabc123...789',
-    latitude: -34.6037,
-    longitude: -58.3816,
-    stage: 'origin',
-  },
-  {
-    eventName: 'Paso por centro logístico',
-    timestamp: '2026-05-14T15:20:00Z',
-    tx_hash: '0xdef456...012',
-    latitude: -34.7017,
-    longitude: -58.4783,
-    stage: 'intermediate',
-  },
-  {
-    eventName: 'Destino final',
-    timestamp: '2026-05-15T09:45:00Z',
-    tx_hash: '0xghi789...345',
-    latitude: -34.5973,
-    longitude: -58.3810,
-    stage: 'destination',
-  },
+  { eventName: 'Origen de carga', timestamp: '2026-05-14T08:30:00Z', tx_hash: '0xabc123...789', latitude: -34.6037, longitude: -58.3816, stage: 'origin' },
+  { eventName: 'Destino final', timestamp: '2026-05-15T09:45:00Z', tx_hash: '0xghi789...345', latitude: -34.5973, longitude: -58.3810, stage: 'destination' }
 ];
 
 const Dashboard = () => {
-  const { userAddress, signer, error, connectWallet, getContractInstance } = useWeb3();
+  const { userAddress, error, connectWallet, getContractInstance } = useWeb3();
   const [contractMessage, setContractMessage] = useState('');
+  const [contractLoading, setContractLoading] = useState(false);
   const [sensorData, setSensorData] = useState(defaultSensorData);
   const [batchEvents, setBatchEvents] = useState(defaultBatchEvents);
   const [dataError, setDataError] = useState(null);
   const navigate = useNavigate();
 
+  const STATIC_BATCH_BLOCKCHAIN_ID = 101;
+
   useEffect(() => {
+    let cancelled = false;
     const loadDashboardData = async () => {
       try {
         const [telemetryRes, eventsRes] = await Promise.all([
@@ -56,155 +60,101 @@ const Dashboard = () => {
           fetch('/api/batch_events'),
         ]);
 
-        if (!telemetryRes.ok || !eventsRes.ok) {
-          throw new Error('Error al cargar datos desde el backend.');
+        if (!telemetryRes.ok || !eventsRes.ok) throw new Error('Error de pasarela API.');
+
+        const [tData, eData] = await Promise.all([telemetryRes.json(), eventsRes.json()]);
+        if (!cancelled) {
+          setSensorData(tData);
+          setBatchEvents(eData);
         }
-
-        const [telemetryData, eventsData] = await Promise.all([
-          telemetryRes.json(),
-          eventsRes.json(),
-        ]);
-
-        setSensorData(telemetryData);
-        setBatchEvents(eventsData);
       } catch (err) {
-        setDataError(err.message || 'No se pudieron obtener los datos del backend.');
+        if (!cancelled) setDataError(err.message || 'Error de conexión MySQL.');
       }
     };
-
     loadDashboardData();
+    return () => { cancelled = true; };
   }, []);
 
-  const ESCROW_CONTRACT_ADDRESS = '0xAaBbCcDdEeFf0011223344556677889900aAbBc';
-  const ESCROW_CONTRACT_ABI = [
-    {
-      name: 'releasePayment',
-      type: 'function',
-      stateMutability: 'nonpayable',
-      inputs: [],
-      outputs: [],
-    },
-    {
-      name: 'openDispute',
-      type: 'function',
-      stateMutability: 'nonpayable',
-      inputs: [],
-      outputs: [],
-    },
-  ];
-
   const handleReleasePayment = async () => {
+    if (!userAddress) {
+      setContractMessage('⚠ Conecta tu wallet primero.');
+      return;
+    }
+    setContractLoading(true);
+    setContractMessage('Procesando liberación de fondos...');
     try {
       const contract = getContractInstance(ESCROW_CONTRACT_ADDRESS, ESCROW_CONTRACT_ABI);
-      const tx = await contract.releasePayment();
+      const tx = await contract.liberarPago(STATIC_BATCH_BLOCKCHAIN_ID);
       await tx.wait();
-      setContractMessage('Pago liberado correctamente.');
+      setContractMessage('✓ Pago liberado en bloque correctamente.');
     } catch (err) {
-      setContractMessage(err?.message || 'Error al liberar el pago.');
+      setContractMessage(`✗ Error: ${err?.reason || err?.message || 'Rechazado.'}`);
+    } finally {
+      setContractLoading(false);
     }
   };
 
   const handleOpenDispute = async () => {
+    if (!userAddress) {
+      setContractMessage('⚠ Conecta tu wallet primero.');
+      return;
+    }
+    setContractLoading(true);
+    setContractMessage('Registrando disputa...');
     try {
       const contract = getContractInstance(ESCROW_CONTRACT_ADDRESS, ESCROW_CONTRACT_ABI);
-      const tx = await contract.openDispute();
+      const tx = await contract.abrirDisputa(STATIC_BATCH_BLOCKCHAIN_ID, "Abierto desde Dashboard Legacy.");
       await tx.wait();
-      setContractMessage('Disputa abierta correctamente.');
+      setContractMessage('✓ Estado de disputa actualizado.');
     } catch (err) {
-      setContractMessage(err?.message || 'Error al abrir la disputa.');
+      setContractMessage(`✗ Error: ${err?.reason || err?.message || 'Rechazado.'}`);
+    } finally {
+      setContractLoading(false);
     }
   };
 
   return (
-    <div className="p-6 bg-gray-50 min-h-screen font-sans">
-      {/* Header */}
-      <div className="flex justify-between items-center mb-8 bg-white p-4 rounded-xl shadow-sm">
+    <div className="p-6 bg-gray-50 min-h-screen font-sans text-gray-700">
+      <div className="flex justify-between items-center mb-8 bg-white p-4 rounded-xl shadow-sm border border-gray-100">
         <div>
-          <h1 className="text-2xl font-bold text-blue-900">CommodityChain Dashboard</h1>
-          <p className="text-sm text-gray-500 mt-1">
-            {userAddress
-              ? `Wallet conectada: ${userAddress.substring(0, 6)}...${userAddress.slice(-4)}`
-              : 'Conecta tu wallet para habilitar las funciones Web3.'}
-          </p>
+          <h1 className="text-xl font-bold text-slate-900">Mesa de Pruebas Unitaria</h1>
+          <p className="text-xs text-gray-400 font-mono">{userAddress || 'Desconectado'}</p>
         </div>
-        <div className="flex space-x-4">
-          <button 
-            onClick={connectWallet}
-            className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 transition"
-          >
-            {userAddress ? 'Revisar Conexión' : 'Connect Wallet'}
+        <div className="flex space-x-2">
+          <button onClick={connectWallet} className="bg-blue-600 text-white px-4 py-2 rounded-lg text-xs font-semibold">
+            {userAddress ? 'Conectado' : 'Conectar Wallet'}
           </button>
-          <button 
-            onClick={() => navigate('/')}
-            className="bg-red-600 text-white px-6 py-2 rounded-lg hover:bg-red-700 transition"
-          >
-            Logout
+          <button onClick={() => navigate(-1)} className="bg-gray-200 text-gray-700 px-4 py-2 rounded-lg text-xs font-semibold">
+            Regresar
           </button>
         </div>
       </div>
-      {error && (
-        <div className="mb-4 rounded-xl bg-red-50 border border-red-200 p-4 text-red-700">
-          {error}
-        </div>
-      )}
-      {dataError && (
-        <div className="mb-4 rounded-xl bg-yellow-50 border border-yellow-200 p-4 text-yellow-700">
-          {dataError}
-        </div>
-      )}
-      {contractMessage && (
-        <div className="mb-4 rounded-xl bg-blue-50 border border-blue-200 p-4 text-blue-700">
-          {contractMessage}
-        </div>
-      )}
+
+      {error && <div className="mb-4 p-3 bg-red-100 text-red-700 rounded-lg text-xs">{error}</div>}
+      {dataError && <div className="mb-4 p-3 bg-amber-100 text-amber-700 rounded-lg text-xs">{dataError}</div>}
+      {contractMessage && <div className="mb-4 p-3 bg-blue-100 text-blue-700 rounded-lg text-xs font-mono">{contractMessage}</div>}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        
-        {/* Columna Izquierda: Detalles e Integridad */}
-        <div className="lg:col-span-1 space-y-6">
-          <div className="bg-white p-6 rounded-xl shadow-md">
-            <h2 className="flex items-center text-lg font-semibold mb-4"><Box className="mr-2"/> Status del Lote</h2>
-            <div className="space-y-3">
-              <p className="text-sm text-gray-500">ID Blockchain: <span className="text-black font-mono">0x44a2...9b1</span></p>
-              <p className="text-sm text-gray-500">Estado: <span className="px-2 py-1 bg-green-100 text-green-700 rounded-full text-xs font-bold">IN TRANSIT</span></p>
-              <p className="text-sm text-gray-500">Escrow: <span className="text-black font-bold">45,000.00 USDC</span></p>
-            </div>
-          </div>
-
-          <div className="bg-white p-6 rounded-xl shadow-md border-t-4 border-blue-500">
-            <h2 className="flex items-center text-lg font-semibold mb-4"><ShieldCheck className="mr-2"/> Certificados IPFS</h2>
-            <ul className="text-sm space-y-2">
-              <li className="text-blue-600 underline cursor-pointer">Certificado_Origen.pdf</li>
-              <li className="text-blue-600 underline cursor-pointer">Analisis_Calidad.pdf</li>
-            </ul>
+        <div className="bg-white p-5 rounded-xl border border-gray-100 space-y-3">
+          <h3 className="font-bold flex items-center text-sm"><Box className="mr-2 h-4 w-4"/> Acuerdo Estático</h3>
+          <p className="text-xs">ID Blockchain Forzado: <span className="font-mono text-blue-600 font-bold">#{STATIC_BATCH_BLOCKCHAIN_ID}</span></p>
+          <div className="pt-4 flex flex-col gap-2">
+            <button onClick={handleReleasePayment} disabled={contractLoading} className="w-full bg-emerald-600 text-white py-2.5 rounded-lg text-xs font-bold disabled:opacity-40">
+              Liberar Fondos Lote 101
+            </button>
+            <button onClick={handleOpenDispute} disabled={contractLoading} className="w-full bg-red-50 text-red-600 py-2.5 rounded-lg text-xs font-bold disabled:opacity-40">
+              Abrir Disputa Lote 101
+            </button>
           </div>
         </div>
 
-        {/* Columna Central y Derecha: Visualización de Datos */}
-        <div className="lg:col-span-2 space-y-6">
-          
-          {/* Gráfico de Telemetría */}
-          <div className="bg-slate-950 p-6 rounded-3xl shadow-xl border border-slate-800">
-            <h2 className="flex items-center text-lg font-semibold mb-4 text-slate-100"><Thermometer className="mr-2"/> Control de Temperatura (IoT)</h2>
-              <BatchTelemetryChart data={sensorData} />
+        <div className="lg:col-span-2 space-y-4">
+          <div className="bg-slate-950 p-4 rounded-xl border border-slate-800">
+            <BatchTelemetryChart data={sensorData} />
           </div>
-
-          {/* Mapa de Navegación del Proceso */}
-          <div className="bg-white p-6 rounded-xl shadow-md">
-            <h2 className="flex items-center text-lg font-semibold mb-4"><MapPin className="mr-2"/> Trazabilidad en Tiempo Real</h2>
+          <div className="bg-white p-4 rounded-xl border border-gray-100">
             <BatchRouteMap events={batchEvents} />
           </div>
-
-          {/* Acciones del Smart Contract */}
-          <div className="flex gap-4">
-            <button className="flex-1 bg-green-600 text-white py-3 rounded-xl font-bold shadow-lg hover:bg-green-700">
-              Confirmar Recepción (Liberar Pago)
-            </button>
-            <button className="flex-1 bg-red-100 text-red-600 py-3 rounded-xl font-bold hover:bg-red-200">
-              Abrir Disputa
-            </button>
-          </div>
-
         </div>
       </div>
     </div>

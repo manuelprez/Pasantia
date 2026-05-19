@@ -1,10 +1,17 @@
 require('dotenv').config();
 const express = require('express');
+const cors = require('cors'); // <-- CORREGIDO: Importación de CORS para el Frontend
 const PDFDocument = require('pdfkit');
 const { ethers } = require('ethers');
+const { v4: uuidv4 } = require('uuid');
+
 const app = express();
+
+// --- MIDDLEWARES ---
+app.use(cors()); // <-- CORREGIDO: Habilitación de CORS para evitar bloqueos de origen cruzado
 app.use(express.json());
 
+// --- CONFIGURACIÓN DE BASE DE DATOS ---
 const dbType = process.env.DB_TYPE?.toLowerCase()
   || (process.env.DATABASE_URL?.startsWith('mysql') ? 'mysql'
   : process.env.MYSQL_HOST || process.env.MYSQL_URL || process.env.MYSQL_DATABASE_URL ? 'mysql'
@@ -88,6 +95,7 @@ const dbQuery = async (sql, params = []) => {
   return rows;
 };
 
+// --- CONFIGURACIÓN DE BLOCKCHAIN ---
 const provider = new ethers.JsonRpcProvider(process.env.RPC_URL || 'http://localhost:8545');
 const contractAddress = process.env.CONTRACT_ADDRESS;
 let contract = null;
@@ -97,8 +105,7 @@ if (contractAddress && process.env.CONTRACT_ABI) {
   contract = new ethers.Contract(contractAddress, contractAbi, provider);
 }
 
-const { v4: uuidv4 } = require('uuid');
-
+// --- INDEXADOR Y ESCUCHA DE EVENTOS ---
 if (contract) {
   console.log('Sincronización Blockchain activa: Escuchando eventos para MySQL...');
 
@@ -121,12 +128,9 @@ if (contract) {
         price = args[2];
       }
 
+      // Limpieza de datos contra valores indefinidos (undefined)
       const cleanId = id !== undefined && id !== null ? Number(id) : Math.floor(Math.random() * 10000);
       const cleanBuyer = buyer ? String(buyer) : '0x0000000000000000000000000000000000000000';
-      
-      // SOLUCIÓN: Definir una wallet para el Vendedor (Seller) ya que tu esquema SQL la exige.
-      // Si tu evento en el futuro incluye un vendedor (ej: event.args.seller), lo usamos. 
-      // Si no, usamos una wallet genérica del sistema temporalmente para que no falle MySQL.
       const cleanSeller = event?.args?.seller || event?.args?.sellerWallet || '0x1111111111111111111111111111111111111111';
 
       let formattedPrice = '0.00';
@@ -145,24 +149,24 @@ if (contract) {
         return;
       }
 
-      // PASO 1: Registrar Comprador en la tabla users
+      // PASO 1: Registrar Comprador en la tabla users para evitar violaciones de clave foránea
       const queryUserBuyer = `
         INSERT IGNORE INTO users (wallet_address, username, role, created_at) 
         VALUES (?, ?, ?, NOW())
       `;
       await dbQuery(queryUserBuyer, [cleanBuyer, `Comprador_${cleanBuyer.substring(2, 8)}`, 'Comprador']);
 
-      // PASO 2: Registrar Vendedor en la tabla users (Obligatorio por Foreign Key del esquema SQL)
+      // PASO 2: Registrar Vendedor en la tabla users (Exigido por Foreign Key en la base de datos)
       const queryUserSeller = `
         INSERT IGNORE INTO users (wallet_address, username, role, created_at) 
         VALUES (?, ?, ?, NOW())
       `;
       await dbQuery(queryUserSeller, [cleanSeller, `Proveedor_${cleanSeller.substring(2, 8)}`, 'Proveedor']);
 
-      // PASO 3: Preparar identificador único de la tabla
+      // PASO 3: Generar identificador único (UUID)
       const sqlBatchId = uuidv4(); 
 
-      // PASO 4: Insertar el lote incluyendo la columna 'seller_wallet' que faltaba
+      // PASO 4: Guardar el lote incorporando 'seller_wallet' para cumplir con las columnas no nulas
       const queryBatch = `
         INSERT INTO batches (id, blockchain_id, status, buyer_wallet, seller_wallet, escrow_value, description, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
@@ -172,12 +176,12 @@ if (contract) {
         cleanId,         
         'Tránsito',         
         cleanBuyer,       
-        cleanSeller, // <--- Aquí añadimos el parámetro requerido que MySQL estaba reclamando
+        cleanSeller, 
         formattedPrice,     
         `Lote creado automáticamente desde Blockchain. Tx: ${txHash}`
       ]);
 
-      // PASO 5: Registrar el hito en la tabla 'batch_events'
+      // PASO 5: Insertar hito inicial para alimentar el mapa
       const queryEvent = `
         INSERT INTO batch_events (id, batch_id, event_name, location_name, latitude, longitude, tx_hash, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
@@ -269,7 +273,7 @@ const normalizeBatchEvents = (rows) => {
   const events = rows.map((row) => ({
     eventName: row.event_name,
     location_name: row.location_name,
-    timestamp: row.created_at, // Asegúrate de que apunte a la columna devuelta por la BD
+    timestamp: row.created_at, 
     tx_hash: row.tx_hash,
     latitude: Number(row.latitude),
     longitude: Number(row.longitude),
@@ -294,6 +298,27 @@ app.get('/api/batches', async (req, res) => {
   }
 });
 
+// CORREGIDO: Arreglado error de ejecución de template dinámico en MySQL/MariaDB
+app.get('/api/batches/active', async (req, res) => {
+  if (!useDb) {
+    const activeFallbacks = fallbackBatches.filter(item => item.status === 'Tránsito');
+    return res.json(activeFallbacks);
+  }
+  try {
+    const query = 
+      'SELECT id, blockchain_id, status, buyer_wallet, seller_wallet, escrow_value, last_tx_hash, description, created_at ' +
+      'FROM batches ' +
+      'WHERE status = ' + param(1) + ' ' +
+      'ORDER BY created_at DESC';
+
+    const rows = await dbQuery(query, ['Tránsito']);
+    return res.json(rows);
+  } catch (error) {
+    console.error('Error fetching active batches:', error);
+    return res.status(500).json({ error: 'Error al leer los lotes activos.' });
+  }
+});
+
 app.get('/api/batches/:id', async (req, res) => {
   const { id } = req.params;
   if (!useDb) {
@@ -302,7 +327,6 @@ app.get('/api/batches/:id', async (req, res) => {
   }
 
   try {
-    // CORREGIDO: Uso correcto de marcadores parametrizados dinámicos
     const rows = await dbQuery(
       `SELECT id, blockchain_id, status, buyer_wallet, seller_wallet, escrow_value, last_tx_hash, description, created_at FROM batches WHERE id = ${param(1)} LIMIT 1`,
       [id]
@@ -334,7 +358,6 @@ app.patch('/api/batches/:id', async (req, res) => {
     const existing = await dbQuery(`SELECT id FROM batches WHERE id = ${param(1)} LIMIT 1`, [id]);
     if (existing.length === 0) return res.status(404).json({ error: 'Batch no encontrado.' });
 
-    // CORREGIDO: Orden posicional estricto de parámetros (? , ?) o ($1, $2)
     await dbQuery(
       `UPDATE batches SET status = ${param(1)} WHERE id = ${param(2)}`,
       [status, id]
@@ -510,22 +533,30 @@ app.post('/api/contracts/generate-pdf', async (req, res) => {
   doc.end();
 });
 
+// CORREGIDO: Protección contra 'undefined' enviado desde el Frontend para evitar romper .map()
 app.get('/api/batch_events', async (req, res) => {
   if (!useDb) return res.json(fallbackBatchEvents);
   try {
     const { batch_id } = req.query;
+
+    // Si el parámetro está vacío o es la cadena literal 'undefined', devolvemos array vacío seguro
+    if (!batch_id || batch_id === 'undefined') {
+      return res.json([]); 
+    }
+
     const query = `
       SELECT event_name, location_name, latitude, longitude, tx_hash, created_at
       FROM batch_events
-      ${batch_id ? `WHERE batch_id = ${param(1)}` : ''}
+      WHERE batch_id = ${param(1)}
       ORDER BY created_at ASC
     `;
-    const params = batch_id ? [batch_id] : [];
-    const rows = await dbQuery(query, params);
+    
+    const rows = await dbQuery(query, [batch_id]);
     return res.json(normalizeBatchEvents(rows));
   } catch (error) {
     console.error('Error fetching batch events:', error);
-    return res.status(500).json({ error: 'Error al leer batch_events desde la base de datos.' });
+    // Devolvemos un array vacío como salvavidas para que el frontend no falle
+    return res.status(500).json([]); 
   }
 });
 

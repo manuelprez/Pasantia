@@ -62,3 +62,16 @@ CREATE TABLE batch_events (
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (batch_id) REFERENCES batches(id)
 );
+
+-- Tabla para almacenar contratos generados por la UI (compatible con ContractManager)
+CREATE TABLE contracts (
+    id BIGINT NOT NULL PRIMARY KEY,
+    contract_id VARCHAR(64) NOT NULL UNIQUE,
+    data JSON,
+    status VARCHAR(30) NOT NULL,
+    hash VARCHAR(128),
+    block BIGINT,
+    signatures JSON,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);

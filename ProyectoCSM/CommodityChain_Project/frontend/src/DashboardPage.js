@@ -114,7 +114,422 @@ export default function DashboardPage() {
   const [selectedBatch, setSelectedBatch] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
+  // Form state para crear contrato
+  const [createForm, setCreateForm] = useState({
+    productType: '',
+    productCategory: '',
+    productDescription: '',
+    quantity: 1,
+    unit: 'Unidades',
+    sellerName: '',
+    sellerAddress: '',
+    sellerEmail: '',
+    buyerName: '',
+    buyerAddress: '',
+    buyerEmail: '',
+    originPort: '',
+    destinationPort: '',
+    departureDate: '',
+    arrivalDate: '',
+    expressDelivery: false,
+    paymentTerms: '50-50',
+    currency: 'USD',
+    basePrice: '',
+    subtotal: 0,
+    totalCost: 0,
+    expressCost: 0,
+    discount: 0
+  });
+  const [createFormErrors, setCreateFormErrors] = useState({});
+
+  const handleCreateFormChange = (e) => {
+    const { name, value } = e.target;
+    setCreateForm(prev => ({ ...prev, [name]: value }));
+  };
+
+  // Generación de IDs y hash al estilo ContractManager
+  const generateNextId = () => {
+    try {
+      const arr = JSON.parse(localStorage.getItem('seachain-contracts') || '[]');
+      if (!arr.length) return 1;
+      const max = Math.max(...arr.map(c => Number(c.id)).filter(n => !isNaN(n)));
+      return (isFinite(max) ? max + 1 : arr.length + 1);
+    } catch (err) {
+      return Date.now();
+    }
+  };
+
+  const generateContractId = (nextId) => {
+    const date = new Date();
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    const random = Math.random().toString(36).substring(2, 6).toUpperCase();
+    return `SCH-${year}${month}${day}-${String(nextId).padStart(4, '0')}-${random}`;
+  };
+
+  const generateContractHash = (contractData) => {
+    const dataString = JSON.stringify(contractData) + Date.now();
+    let hash = 0;
+    for (let i = 0; i < dataString.length; i++) {
+      const char = dataString.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash;
+    }
+    return '0x' + Math.abs(hash).toString(16).padStart(64, '0');
+  };
+
+  const handleCreateContract = (e) => {
+    e.preventDefault();
+    // Validar campos antes de crear
+    const { ok, errors } = validateCreateForm(createForm);
+    if (!ok) {
+      setUiFeedback(errors.list.join(' — '));
+      setCreateFormErrors(errors.map);
+      return;
+    }
+    const nextId = generateNextId();
+    const contractId = generateContractId(nextId);
+    const now = new Date().toISOString();
+
+    const contract = {
+      id: nextId,
+      contractId: contractId,
+      ...createForm,
+      status: 'draft',
+      createdAt: now,
+      updatedAt: now,
+      hash: generateContractHash(createForm),
+      block: Math.floor(Math.random() * 1000000),
+      signatures: { seller: null, buyer: null, signedAt: null }
+    };
+
+    // Guardar en localStorage (compatible con ContractManager)
+    try {
+      const prev = JSON.parse(localStorage.getItem('seachain-contracts') || '[]');
+      prev.unshift(contract);
+      localStorage.setItem('seachain-contracts', JSON.stringify(prev));
+    } catch (err) {
+      console.error('Error saving contract', err);
+    }
+
+    // Añadir al estado de batches para visibilidad en dashboard (mapear a formato de UI)
+    const batchItem = {
+      id: contract.contractId,
+      blockchain_id: contract.block,
+      status: 'Borrador',
+      escrow_value: contract.basePrice || contract.escrow_value || '0',
+      description: contract.productDescription || 'Contrato generado',
+      created_at: contract.createdAt,
+      origin: contract.originPort || contract.origin,
+      destination: contract.destinationPort || contract.destination,
+      progress: 0,
+      eta: contract.arrivalDate || ''
+    };
+
+    setBatches(prev => [batchItem, ...prev]);
+    setSavedContracts(prev => [contract, ...prev]);
+    setCreateFormErrors({});
+    setUiFeedback('Contrato creado y guardado localmente.');
+    setView('dashboard');
+    setCreateForm({
+      productType: '', productCategory: '', productDescription: '', quantity: 1, unit: 'Unidades', sellerName: '', sellerAddress: '', sellerEmail: '', buyerName: '', buyerAddress: '', buyerEmail: '', originPort: '', destinationPort: '', departureDate: '', arrivalDate: '', expressDelivery: false, paymentTerms: '50-50', currency: 'USD', basePrice: '', subtotal: 0, totalCost: 0, expressCost: 0, discount: 0
+    });
+  };
+
+  // Validación básica y congruencia de campos del formulario
+  const validateCreateForm = (form) => {
+    const list = [];
+    const map = {};
+    const add = (key, msg) => { map[key] = msg; list.push(msg); };
+    if (!form.productType) add('productType', 'Selecciona el tipo de producto');
+    if (!form.productCategory) add('productCategory', 'Selecciona la categoría');
+    if (!form.productDescription || form.productDescription.trim().length < 5) add('productDescription', 'Describe el producto (mínimo 5 caracteres)');
+    if (!form.quantity || Number(form.quantity) <= 0) add('quantity', 'La cantidad debe ser mayor que 0');
+    if (!form.unit) add('unit', 'Selecciona la unidad');
+    if (!form.basePrice || isNaN(Number(form.basePrice)) || Number(form.basePrice) <= 0) add('basePrice', 'Precio base inválido');
+    if (!form.originPort) add('originPort', 'Indica el puerto de origen');
+    if (!form.destinationPort) add('destinationPort', 'Indica el puerto destino');
+    if (form.departureDate && form.arrivalDate) {
+      const d1 = new Date(form.departureDate);
+      const d2 = new Date(form.arrivalDate);
+      if (d2 < d1) add('arrivalDate', 'La fecha de llegada no puede ser anterior a la de salida');
+    }
+    if (!form.sellerName) add('sellerName', 'Indica el nombre del vendedor');
+    if (!form.buyerName) add('buyerName', 'Indica el nombre del comprador');
+    // Emails opcionales pero si están, validar formato simple
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (form.sellerEmail && !emailRegex.test(form.sellerEmail)) add('sellerEmail', 'Email vendedor inválido');
+    if (form.buyerEmail && !emailRegex.test(form.buyerEmail)) add('buyerEmail', 'Email comprador inválido');
+    return { ok: list.length === 0, errors: { map, list } };
+  };
+
+  // Generar y descargar PDF llamando al endpoint del backend (usa payload si DB no está configurada)
+  const downloadContractPdf = async (party = 'buyer') => {
+    const payload = {
+      batchId: createForm.productDescription || `contract-${Date.now()}`,
+      buyerWallet: createForm.buyerAddress || createForm.buyerEmail || createForm.buyerName || 'N/A',
+      sellerWallet: createForm.sellerAddress || createForm.sellerEmail || createForm.sellerName || 'N/A',
+      arbiterWallet: process.env.REACT_APP_ARBITER_WALLET || '0x0000000000000000000000000000000000000000',
+      amountLocked: createForm.basePrice || createForm.totalCost || '0',
+      status: 'draft',
+      tx_hash: createForm.tx_hash || '0x0'
+    };
+
+    try {
+      const res = await fetch('/api/contracts/generate-pdf', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        setUiFeedback(err.error || 'Error al generar PDF');
+        return;
+      }
+
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `Contrato_${party}_${payload.batchId}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+      setUiFeedback(`PDF generado: ${party}`);
+    } catch (err) {
+      console.error('PDF generation error', err);
+      setUiFeedback('Error al generar PDF');
+    }
+  };
+
+  // Descargar PDF para contrato guardado (intenta GET por contractId, cae en fallback si falla)
+  const downloadSavedContractPdf = async (contractId, party = 'buyer') => {
+    try {
+      const res = await fetch(`/api/contracts/${encodeURIComponent(contractId)}/pdf?party=${party}`);
+      if (res.ok) {
+        const blob = await res.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `Contrato_${party}_${contractId}.pdf`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        window.URL.revokeObjectURL(url);
+        setUiFeedback(`PDF descargado: ${party}`);
+        return;
+      }
+      console.warn('GET PDF no disponible, intentando fallback POST');
+    } catch (err) {
+      console.warn('GET PDF falló, intentando fallback POST', err);
+    }
+
+    // Fallback: generar vía POST con datos desde localStorage
+    try {
+      const stored = JSON.parse(localStorage.getItem('seachain-contracts') || '[]');
+      const c = stored.find(s => s.contractId === contractId) || stored[0];
+      if (!c) return setUiFeedback('Contrato no encontrado en localStorage para generar PDF.');
+
+      const payload = {
+        batchId: c.contractId,
+        buyerWallet: c.buyerAddress || c.buyerEmail || c.buyerName || 'N/A',
+        sellerWallet: c.sellerAddress || c.sellerEmail || c.sellerName || 'N/A',
+        arbiterWallet: process.env.REACT_APP_ARBITER_WALLET || '0x0000000000000000000000000000000000000000',
+        amountLocked: c.basePrice || c.totalCost || '0',
+        status: c.status || 'draft',
+        tx_hash: c.tx_hash || '0x0'
+      };
+
+      const r2 = await fetch('/api/contracts/generate-pdf', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      if (r2.ok) {
+        const blob = await r2.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `Contrato_${party}_${contractId}.pdf`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        window.URL.revokeObjectURL(url);
+        setUiFeedback(`PDF generado (fallback): ${party}`);
+        return;
+      }
+
+      // Si el servidor no pudo generar, usar generación client-side para vista inmediata
+      await generatePdfClient(c, party);
+      setUiFeedback(`PDF generado localmente: ${party}`);
+    } catch (err) {
+      console.error('Fallback PDF error', err);
+      // Intento final: generar en cliente
+      try {
+        const stored2 = JSON.parse(localStorage.getItem('seachain-contracts') || '[]');
+        const c2 = stored2.find(s => s.contractId === contractId) || stored2[0];
+        if (c2) {
+          await generatePdfClient(c2, party);
+          setUiFeedback(`PDF generado localmente: ${party}`);
+        } else {
+          setUiFeedback('Error al generar PDF (revise servidor).');
+        }
+      } catch (err2) {
+        console.error('Generación cliente falló', err2);
+        setUiFeedback('Error al generar PDF (revise servidor).');
+      }
+    }
+  };
+
+  // --- Generación client-side con jsPDF (carga desde CDN si es necesario)
+  const ensureJsPdf = () => new Promise((resolve, reject) => {
+    if (window.jspdf && window.jspdf.jsPDF) return resolve(window.jspdf.jsPDF);
+    const existing = document.getElementById('jspdf-cdn');
+    if (existing) {
+      existing.addEventListener('load', () => resolve(window.jspdf && window.jspdf.jsPDF));
+      existing.addEventListener('error', () => reject(new Error('No se pudo cargar jsPDF')));
+      return;
+    }
+    const s = document.createElement('script');
+    s.id = 'jspdf-cdn';
+    s.src = 'https://unpkg.com/jspdf@2.5.1/dist/jspdf.umd.min.js';
+    s.onload = () => resolve(window.jspdf && window.jspdf.jsPDF);
+    s.onerror = () => reject(new Error('No se pudo cargar jsPDF desde CDN'));
+    document.head.appendChild(s);
+  });
+
+  const generatePdfClient = async (c, party = 'buyer') => {
+    try {
+      const jsPDF = await ensureJsPdf();
+      const doc = new jsPDF({ unit: 'pt', format: 'a4' });
+      const pageWidth = doc.internal.pageSize.getWidth();
+      // Header
+      doc.setFillColor(11,37,69);
+      doc.rect(0, 0, pageWidth, 64, 'F');
+      doc.setTextColor('#FFFFFF');
+      doc.setFontSize(20);
+      doc.text('SeaChain - Contrato Inteligente', 40, 42);
+
+      // Contract ID and small meta
+      doc.setTextColor('#333333');
+      doc.setFontSize(11);
+      doc.text(`Contrato ID: ${c.contractId}`, 40, 88);
+      doc.text(`Fecha: ${new Date(c.createdAt || Date.now()).toLocaleDateString()}`, pageWidth - 160, 88);
+
+      // Seller / Buyer boxes
+      const boxY = 110;
+      const boxH = 72;
+      doc.setDrawColor(200);
+      doc.setFillColor(245,245,247);
+      doc.roundedRect(40, boxY, 250, boxH, 6, 6, 'F');
+      doc.roundedRect(320, boxY, 250, boxH, 6, 6, 'F');
+      doc.setTextColor('#0B2545');
+      doc.setFontSize(12);
+      doc.text('Vendedor', 50, boxY + 18);
+      doc.setFontSize(10);
+      doc.setTextColor('#333');
+      doc.text(c.sellerName || c.sellerEmail || '—', 50, boxY + 36);
+      doc.text(c.sellerAddress || '', 50, boxY + 52);
+      doc.setFontSize(12);
+      doc.setTextColor('#0B2545');
+      doc.text('Comprador', 330, boxY + 18);
+      doc.setFontSize(10);
+      doc.setTextColor('#333');
+      doc.text(c.buyerName || c.buyerEmail || '—', 330, boxY + 36);
+      doc.text(c.buyerAddress || '', 330, boxY + 52);
+
+      // Details table
+      const detailsY = boxY + boxH + 18;
+      doc.setFontSize(11);
+      doc.setTextColor('#0B2545');
+      doc.text('Resumen del Acuerdo', 40, detailsY);
+      doc.setFontSize(10);
+      const rows = [
+        ['Producto', c.productDescription || '—'],
+        ['Cantidad', `${c.quantity || 0} ${c.unit || ''}`],
+        ['Puerto Origen', c.originPort || '—'],
+        ['Puerto Destino', c.destinationPort || '—'],
+        ['Fecha Salida', c.departureDate || '—'],
+        ['Fecha Llegada', c.arrivalDate || '—'],
+        ['Términos de Pago', c.paymentTerms || '—'],
+        ['Monto', `${c.basePrice || c.totalCost || '0'} ${c.currency || 'USD'}`]
+      ];
+      let ry = detailsY + 12;
+      const labelX = 50;
+      const valueX = 220;
+      rows.forEach(([label, value]) => {
+        doc.setTextColor('#0B2545'); doc.setFontSize(10); doc.text(label, labelX, ry);
+        doc.setTextColor('#111'); doc.setFontSize(10);
+        const vlines = doc.splitTextToSize(String(value), 300);
+        doc.text(vlines, valueX, ry);
+        ry += (vlines.length * 12) + 8;
+      });
+
+      // Clauses
+      const clausesY = ry + 4;
+      doc.setFontSize(11); doc.setTextColor('#0B2545'); doc.text('Cláusulas', 40, clausesY);
+      const clauses = [
+        '1. El presente contrato obliga a las partes según los términos aquí descritos.',
+        '2. El comprador debe ejecutar depositarFondos() para bloquear el monto en el contrato inteligente.',
+        '3. La liberación de fondos será ejecutada mediante liberarPago() una vez verificadas las condiciones.',
+        '4. En caso de controversia, cualquiera de las partes puede abrirDisputa() para activar la intervención del árbitro.'
+      ];
+      let cy = clausesY + 14;
+      doc.setFontSize(10); doc.setTextColor('#222');
+      clauses.forEach(cl => {
+        const lines = doc.splitTextToSize(cl, 460);
+        doc.text(lines, 40, cy);
+        cy += lines.length * 12 + 6;
+      });
+
+      // Pago instructions + QR at right column
+      const payLink = `${window.location.origin}/pay?contract=${encodeURIComponent(c.contractId)}&party=${party}`;
+      const qrX = pageWidth - 180;
+      const qrY = boxY + 4;
+      try {
+        const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(payLink)}`;
+        const dataUrl = await fetchImageAsDataURL(qrUrl);
+        doc.addImage(dataUrl, 'PNG', qrX, qrY, 120, 120);
+      } catch (e) {
+        // ignore qr errors
+      }
+      doc.setFontSize(10); doc.setTextColor('#1155cc');
+      doc.text('Instrucciones de Pago', qrX - 140, qrY + 8);
+      doc.setFontSize(9); doc.setTextColor('#333');
+      const payLines = doc.splitTextToSize(payLink, 140);
+      doc.text(payLines, qrX - 140, qrY + 26);
+
+      // Signatures and authenticity
+      const sigY = Math.max(cy, qrY + 140) + 16;
+      doc.setDrawColor(180); doc.setLineWidth(0.5);
+      doc.line(60, sigY, 220, sigY);
+      doc.text('Firma Vendedor', 60, sigY + 14);
+      doc.line(300, sigY, 460, sigY);
+      doc.text('Firma Comprador', 300, sigY + 14);
+      doc.setFontSize(9); doc.setTextColor('#666');
+      doc.text(`Sello de autenticidad: ${c.hash || ''}`, 40, sigY + 44);
+
+      const filename = `Contrato_${party}_${c.contractId}.pdf`;
+      doc.save(filename);
+    } catch (err) {
+      console.error('generatePdfClient error', err);
+      throw err;
+    }
+  };
+
+  // Helper: fetch image and return dataURL
+  const fetchImageAsDataURL = async (url) => {
+    const resp = await fetch(url);
+    const blob = await resp.blob();
+    return await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  };
+
   const [batches, setBatches] = useState(defaultBatches);
+  const [savedContracts, setSavedContracts] = useState([]);
   const [sensorData, setSensorData] = useState(defaultSensorLogs);
   const [batchEvents, setBatchEvents] = useState(defaultTimelineEvents);
   
@@ -124,6 +539,12 @@ export default function DashboardPage() {
 
   const [filterStatus, setFilterStatus] = useState('Todos');
   const [searchTerm, setSearchTerm] = useState('');
+
+  const batchesWithFallback = useMemo(() => {
+    const existingStatuses = new Set(batches.map(b => b.status));
+    const missingSamples = defaultBatches.filter(b => !existingStatuses.has(b.status));
+    return [...batches, ...missingSamples];
+  }, [batches]);
 
   useEffect(() => {
     const loadDashboardData = async () => {
@@ -145,6 +566,13 @@ export default function DashboardPage() {
       }
     };
     loadDashboardData();
+    // Cargar contratos guardados desde localStorage
+    try {
+      const stored = JSON.parse(localStorage.getItem('seachain-contracts') || '[]');
+      if (Array.isArray(stored)) setSavedContracts(stored);
+    } catch (err) {
+      console.error('Error loading saved contracts', err);
+    }
   }, []);
 
   // ─── LOGIC DE CIERRE DE SESIÓN ─────────────────────────────────────────────
@@ -209,11 +637,11 @@ export default function DashboardPage() {
   const totalEscrow = useMemo(() => batches.reduce((t, b) => t + Number(b.escrow_value || 0), 0), [batches]);
   const statusOptions = ['Todos', 'Tránsito', 'Entregado', 'Disputa'];
 
-  const filteredBatches = useMemo(() => batches.filter(b => {
+  const filteredBatches = useMemo(() => batchesWithFallback.filter(b => {
     const ms = filterStatus === 'Todos' || b.status === filterStatus;
     const mt = [b.id, b.description || '', b.last_tx_hash || ''].join(' ').toLowerCase().includes(searchTerm.toLowerCase());
     return ms && mt;
-  }), [batches, filterStatus, searchTerm]);
+  }), [batchesWithFallback, filterStatus, searchTerm]);
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-slate-950 font-sans text-slate-400 selection:bg-cyan-500/30 selection:text-cyan-200">
@@ -241,6 +669,11 @@ export default function DashboardPage() {
               {viewKey === 'dashboard' ? 'Dashboard General' : 'Control de Roles'}
             </button>
           ))}
+          <div className="mt-4 px-2">
+            <button onClick={() => { setView('create'); setSidebarOpen(false); }} className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-xs font-medium transition bg-gradient-to-r from-cyan-600 to-blue-600 text-white">
+              <Plus className="h-4 w-4" /> Crear Contrato
+            </button>
+          </div>
         </nav>
 
         <div className="rounded-xl border border-slate-900 bg-slate-900/40 p-3">
@@ -301,11 +734,12 @@ export default function DashboardPage() {
             
             {view === 'dashboard' && (
               <div className="space-y-6">
-                <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+                <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
                   {[
                     { label: 'Valor en Escrow', value: totalEscrow.toLocaleString('en-US', { style: 'currency', currency: 'USD' }), icon: DollarSign, color: 'text-emerald-400' },
                     { label: 'Lotes Totales', value: batches.length, icon: Package, color: 'text-cyan-400' },
                     { label: 'En Tránsito', value: batches.filter(b => b.status === 'Tránsito').length, icon: Truck, color: 'text-blue-400' },
+                    { label: 'Entregado', value: batches.filter(b => b.status === 'Entregado').length, icon: CheckCircle2, color: 'text-emerald-400' },
                     { label: 'En Disputa', value: batches.filter(b => b.status === 'Disputa').length, icon: AlertTriangle, color: 'text-rose-400' },
                   ].map(s => (
                     <Card key={s.label} className="p-5">
@@ -340,6 +774,26 @@ export default function DashboardPage() {
                   </div>
                 </Card>
 
+                {savedContracts && savedContracts.length > 0 && (
+                  <Card className="p-4">
+                    <h4 className="text-sm font-semibold text-white mb-3">Mis Contratos Guardados</h4>
+                    <div className="space-y-2">
+                      {savedContracts.map(c => (
+                        <div key={c.contractId} className="flex items-center justify-between rounded-lg border border-slate-800 p-3 bg-slate-950">
+                          <div>
+                            <div className="text-sm font-medium text-white">{c.contractId}</div>
+                            <div className="text-xs text-slate-400">{c.productDescription || '—'}</div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button onClick={(e) => { e.stopPropagation(); downloadSavedContractPdf(c.contractId, 'seller'); }} className="rounded-md bg-amber-500/90 py-2 px-3 text-xs font-semibold text-white">PDF Vendedor</button>
+                            <button onClick={(e) => { e.stopPropagation(); downloadSavedContractPdf(c.contractId, 'buyer'); }} className="rounded-md bg-cyan-600 py-2 px-3 text-xs font-semibold text-white">PDF Comprador</button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </Card>
+                )}
+
                 <div className="grid gap-4">
                   {filteredBatches.map(batch => (
                     <button key={batch.id} onClick={() => { setSelectedBatch(batch); setView('batch'); }}
@@ -357,6 +811,143 @@ export default function DashboardPage() {
                     </button>
                   ))}
                 </div>
+              </div>
+            )}
+
+            {view === 'create' && (
+              <div className="space-y-6">
+                <button onClick={() => setView('dashboard')} className="text-xs text-slate-500 hover:text-cyan-400 transition">← Volver al Dashboard</button>
+
+                <Card className="p-6">
+                  <SectionTitle sub="Crear">Nuevo Contrato</SectionTitle>
+                  <form onSubmit={handleCreateContract} className="space-y-6">
+                    <div className="grid gap-4 lg:grid-cols-2">
+                      <div>
+                        <label className="text-xs text-slate-400 mb-1 block">Tipo de producto</label>
+                        <select name="productType" value={createForm.productType} onChange={handleCreateFormChange} className={`w-full rounded-2xl ${createFormErrors.productType ? 'border-rose-500' : 'border border-slate-800'} bg-slate-950 p-3 text-sm text-slate-200 focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20`}>
+                          <option value="">Seleccione un tipo</option>
+                          <option value="Carga">Carga</option>
+                          <option value="Servicio">Servicio</option>
+                        </select>
+                        {createFormErrors.productType && <p className="text-rose-400 text-xs mt-2">{createFormErrors.productType}</p>}
+                      </div>
+                      <div>
+                        <label className="text-xs text-slate-400 mb-1 block">Categoría</label>
+                        <select name="productCategory" value={createForm.productCategory} onChange={handleCreateFormChange} className={`w-full rounded-2xl ${createFormErrors.productCategory ? 'border-rose-500' : 'border border-slate-800'} bg-slate-950 p-3 text-sm text-slate-200 focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20`}>
+                          <option value="">Seleccione categoría</option>
+                          <option value="Granel">Granel</option>
+                          <option value="Contenedor">Contenedor</option>
+                          <option value="Pallet">Pallet</option>
+                        </select>
+                        {createFormErrors.productCategory && <p className="text-rose-400 text-xs mt-2">{createFormErrors.productCategory}</p>}
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="text-xs text-slate-400 mb-2 block">Descripción del producto</label>
+                      <textarea name="productDescription" value={createForm.productDescription} onChange={handleCreateFormChange} placeholder="Describe el producto, condiciones y especificaciones" className={`w-full rounded-[28px] ${createFormErrors.productDescription ? 'border-rose-500' : 'border border-slate-800'} bg-slate-950 p-4 text-sm text-slate-200 min-h-[140px] focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20`} />
+                      {createFormErrors.productDescription && <p className="text-rose-400 text-xs mt-2">{createFormErrors.productDescription}</p>}
+                    </div>
+
+                    <div className="grid gap-4 lg:grid-cols-3">
+                      <div>
+                        <label className="text-xs text-slate-400 mb-1 block">Cantidad</label>
+                        <input name="quantity" value={createForm.quantity} onChange={handleCreateFormChange} type="number" min="1" className={`w-full rounded-2xl ${createFormErrors.quantity ? 'border-rose-500' : 'border border-slate-800'} bg-slate-950 p-3 text-sm text-slate-200 focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20`} />
+                        {createFormErrors.quantity && <p className="text-rose-400 text-xs mt-2">{createFormErrors.quantity}</p>}
+                      </div>
+                      <div>
+                        <label className="text-xs text-slate-400 mb-1 block">Unidad</label>
+                        <select name="unit" value={createForm.unit} onChange={handleCreateFormChange} className={`w-full rounded-2xl ${createFormErrors.unit ? 'border-rose-500' : 'border border-slate-800'} bg-slate-950 p-3 text-sm text-slate-200 focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20`}>
+                          <option>Unidades</option>
+                          <option>Kilogramos</option>
+                          <option>Toneladas</option>
+                        </select>
+                        {createFormErrors.unit && <p className="text-rose-400 text-xs mt-2">{createFormErrors.unit}</p>}
+                      </div>
+                      <div>
+                        <label className="text-xs text-slate-400 mb-1 block">Precio base</label>
+                        <input name="basePrice" value={createForm.basePrice} onChange={handleCreateFormChange} placeholder="Monto por unidad" className={`w-full rounded-2xl ${createFormErrors.basePrice ? 'border-rose-500' : 'border border-slate-800'} bg-slate-950 p-3 text-sm text-slate-200 focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20`} />
+                        {createFormErrors.basePrice && <p className="text-rose-400 text-xs mt-2">{createFormErrors.basePrice}</p>}
+                      </div>
+                    </div>
+
+                    <div className="grid gap-4 lg:grid-cols-2">
+                      <div>
+                        <label className="text-xs text-slate-400 mb-1 block">Puerto Origen</label>
+                        <input name="originPort" value={createForm.originPort} onChange={handleCreateFormChange} placeholder="Ej. Cartagena, Colombia" className={`w-full rounded-2xl ${createFormErrors.originPort ? 'border-rose-500' : 'border border-slate-800'} bg-slate-950 p-3 text-sm text-slate-200 focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20`} />
+                        {createFormErrors.originPort && <p className="text-rose-400 text-xs mt-2">{createFormErrors.originPort}</p>}
+                      </div>
+                      <div>
+                        <label className="text-xs text-slate-400 mb-1 block">Puerto Destino</label>
+                        <input name="destinationPort" value={createForm.destinationPort} onChange={handleCreateFormChange} placeholder="Ej. Valencia, España" className={`w-full rounded-2xl ${createFormErrors.destinationPort ? 'border-rose-500' : 'border border-slate-800'} bg-slate-950 p-3 text-sm text-slate-200 focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20`} />
+                        {createFormErrors.destinationPort && <p className="text-rose-400 text-xs mt-2">{createFormErrors.destinationPort}</p>}
+                      </div>
+                    </div>
+
+                    <div className="grid gap-4 lg:grid-cols-2">
+                      <div>
+                        <label className="text-xs text-slate-400 mb-1 block">Fecha de salida</label>
+                        <input name="departureDate" value={createForm.departureDate} onChange={handleCreateFormChange} type="date" className={`w-full rounded-2xl ${createFormErrors.departureDate ? 'border-rose-500' : 'border border-slate-800'} bg-slate-950 p-3 text-sm text-slate-200 focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20`} />
+                      </div>
+                      <div>
+                        <label className="text-xs text-slate-400 mb-1 block">Fecha estimada de llegada</label>
+                        <input name="arrivalDate" value={createForm.arrivalDate} onChange={handleCreateFormChange} type="date" className={`w-full rounded-2xl ${createFormErrors.arrivalDate ? 'border-rose-500' : 'border border-slate-800'} bg-slate-950 p-3 text-sm text-slate-200 focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20`} />
+                        {createFormErrors.arrivalDate && <p className="text-rose-400 text-xs mt-2">{createFormErrors.arrivalDate}</p>}
+                      </div>
+                    </div>
+
+                    <div className="grid gap-4 lg:grid-cols-2">
+                      <div className="flex items-start gap-3 rounded-2xl border border-slate-800 bg-slate-950 p-4">
+                        <input name="expressDelivery" type="checkbox" checked={createForm.expressDelivery} onChange={e => setCreateForm(prev => ({ ...prev, expressDelivery: e.target.checked }))} className="mt-1 h-4 w-4 rounded border-slate-700 bg-slate-900 text-cyan-400 focus:ring-cyan-500" />
+                        <div>
+                          <p className="text-sm text-slate-200 font-semibold">Entrega Express</p>
+                          <p className="text-xs text-slate-500">Agiliza la logística con prioridad de despacho.</p>
+                        </div>
+                      </div>
+                      <div>
+                        <label className="text-xs text-slate-400 mb-1 block">Condiciones de pago</label>
+                        <select name="paymentTerms" value={createForm.paymentTerms} onChange={handleCreateFormChange} className="w-full rounded-2xl border border-slate-800 bg-slate-950 p-3 text-sm text-slate-200 focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20">
+                          <option value="50-50">50% al inicio / 50% a la entrega</option>
+                          <option value="full">Pago completo al iniciar</option>
+                          <option value="on-delivery">Pago a la entrega</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div className="grid gap-4 lg:grid-cols-2">
+                      <div>
+                        <label className="text-xs text-slate-400 mb-1 block">Vendedor / Proveedor</label>
+                        <input name="sellerName" value={createForm.sellerName} onChange={handleCreateFormChange} placeholder="Nombre o razón social" className={`w-full rounded-2xl ${createFormErrors.sellerName ? 'border-rose-500' : 'border border-slate-800'} bg-slate-950 p-3 text-sm text-slate-200 focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20`} />
+                        {createFormErrors.sellerName && <p className="text-rose-400 text-xs mt-2">{createFormErrors.sellerName}</p>}
+                      </div>
+                      <div>
+                        <label className="text-xs text-slate-400 mb-1 block">Comprador / Cliente</label>
+                        <input name="buyerName" value={createForm.buyerName} onChange={handleCreateFormChange} placeholder="Nombre o razón social" className={`w-full rounded-2xl ${createFormErrors.buyerName ? 'border-rose-500' : 'border border-slate-800'} bg-slate-950 p-3 text-sm text-slate-200 focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20`} />
+                        {createFormErrors.buyerName && <p className="text-rose-400 text-xs mt-2">{createFormErrors.buyerName}</p>}
+                      </div>
+                    </div>
+
+                    <div className="grid gap-4 lg:grid-cols-2">
+                      <div>
+                        <label className="text-xs text-slate-400 mb-1 block">Datos adicionales del vendedor</label>
+                        <input name="sellerAddress" value={createForm.sellerAddress} onChange={handleCreateFormChange} placeholder="Dirección / empresa" className="w-full rounded-2xl border border-slate-800 bg-slate-950 p-3 text-sm text-slate-200 focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20" />
+                      </div>
+                      <div>
+                        <label className="text-xs text-slate-400 mb-1 block">Datos adicionales del comprador</label>
+                        <input name="buyerAddress" value={createForm.buyerAddress} onChange={handleCreateFormChange} placeholder="Dirección / empresa" className="w-full rounded-2xl border border-slate-800 bg-slate-950 p-3 text-sm text-slate-200 focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/20" />
+                      </div>
+                    </div>
+
+                    <div className="grid gap-3 lg:grid-cols-3">
+                      <button type="submit" className="rounded-2xl bg-cyan-500 py-3 px-4 text-sm font-semibold text-white shadow-lg shadow-cyan-500/10 transition hover:bg-cyan-400">Crear y Guardar</button>
+                      <button type="button" onClick={() => setCreateForm({ productType: '', productCategory: '', productDescription: '', quantity: 1, unit: 'Unidades', sellerName: '', sellerAddress: '', sellerEmail: '', buyerName: '', buyerAddress: '', buyerEmail: '', originPort: '', destinationPort: '', departureDate: '', arrivalDate: '', expressDelivery: false, paymentTerms: '50-50', currency: 'USD', basePrice: '', subtotal: 0, totalCost: 0, expressCost: 0, discount: 0 })} className="rounded-2xl border border-slate-700 bg-slate-950 py-3 px-4 text-sm text-slate-200 transition hover:border-slate-500">Limpiar</button>
+                      <div className="grid gap-2">
+                        <button type="button" onClick={() => downloadContractPdf('seller')} className="rounded-2xl bg-amber-500 py-3 px-4 text-sm font-semibold text-white shadow-lg shadow-amber-500/10 transition hover:bg-amber-400">PDF Vendedor</button>
+                        <button type="button" onClick={() => downloadContractPdf('buyer')} className="rounded-2xl bg-cyan-600 py-3 px-4 text-sm font-semibold text-white shadow-lg shadow-cyan-600/10 transition hover:bg-cyan-500">PDF Comprador</button>
+                      </div>
+                    </div>
+                  </form>
+                </Card>
               </div>
             )}
 

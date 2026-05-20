@@ -470,7 +470,7 @@ app.post('/api/contracts/generate-pdf', async (req, res) => {
   doc.moveDown(1);
 
   doc.fontSize(12).fillColor('#1a1a1a').font('Helvetica-Bold').text('Resumen del Acuerdo');
-  doc.moveDown(0.5);
+    res.setHeader('Content-Disposition', `attachment; filename="Contrato_Escrow_${batchData.batchId}.pdf"`);
 
   const tableRows = [
     ['Batch ID', String(batchData.batchId)],
@@ -529,6 +529,98 @@ app.post('/api/contracts/generate-pdf', async (req, res) => {
   doc.rect(50, doc.y, 500, 60).fillOpacity(0.05).fill('#0B2545');
   doc.fillOpacity(1).font('Helvetica-Bold').fontSize(10).fillColor('#0B2545').text('Sello de Autenticidad (Hash de Transacción)', 55, doc.y + 8);
   doc.font('Helvetica').fontSize(10).fillColor('#333333').text(batchData.tx_hash, 55, doc.y + 25);
+
+  doc.end();
+});
+
+// Guardar contrato en la base de datos (compatible con ContractManager)
+app.post('/api/contracts', async (req, res) => {
+  const contract = req.body;
+  if (!contract || !contract.contractId) return res.status(400).json({ error: 'Se requiere el objeto contract con contractId' });
+
+  if (!useDb) {
+    return res.status(503).json({ error: 'Base de datos no configurada. Guarda localmente desde el frontend.' });
+  }
+
+  try {
+    const sql = `INSERT INTO contracts (id, contract_id, data, status, hash, block, signatures, created_at, updated_at) VALUES (${param(1)}, ${param(2)}, ${param(3)}, ${param(4)}, ${param(5)}, ${param(6)}, ${param(7)}, NOW(), NOW())`;
+    const idVal = contract.id || Date.now();
+    const dataVal = JSON.stringify(contract);
+    const sigVal = JSON.stringify(contract.signatures || {});
+    await dbQuery(sql, [idVal, contract.contractId, dataVal, contract.status || 'draft', contract.hash || null, contract.block || null, sigVal]);
+    return res.json({ ok: true, contractId: contract.contractId });
+  } catch (error) {
+    console.error('Error saving contract to DB:', error);
+    return res.status(500).json({ error: 'No se pudo guardar el contrato en BD.' });
+  }
+});
+
+// Generar PDF para vendedor o comprador a partir de un contractId
+app.get('/api/contracts/:contractId/pdf', async (req, res) => {
+  const { contractId } = req.params;
+  const party = req.query.party === 'seller' ? 'seller' : 'buyer';
+
+  let contract = null;
+  if (useDb) {
+    try {
+      const rows = await dbQuery(`SELECT id, contract_id, data, status, hash, block FROM contracts WHERE contract_id = ${param(1)} LIMIT 1`, [contractId]);
+      if (rows.length > 0) {
+        contract = rows[0];
+        try { contract.data = JSON.parse(contract.data); } catch (e) { /* ignore */ }
+      }
+    } catch (err) {
+      console.error('Error reading contract from DB:', err);
+    }
+  }
+
+  // If no DB or not found, require body fallback
+  if (!contract) return res.status(404).json({ error: 'Contrato no encontrado en BD. Use POST /api/contracts/generate-pdf con payload.' });
+
+  // Build PDF
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="Contrato_${contract.contract_id}_${party}.pdf"`);
+
+  const doc = new PDFDocument({ size: 'A4', margins: { top: 50, bottom: 50, left: 50, right: 50 } });
+  doc.pipe(res);
+
+  const cdata = contract.data || {};
+  doc.fillColor('#0B2545').fontSize(18).font('Helvetica-Bold').text('Contrato Inteligente SeaChain', { align: 'center' });
+  doc.moveDown(0.5);
+  doc.fontSize(12).fillColor('#333').text(`Contrato ID: ${contract.contract_id}`);
+  doc.moveDown(0.5);
+
+  doc.font('Helvetica-Bold').fontSize(12).fillColor('#0B2545').text('Términos principales');
+  doc.moveDown(0.3);
+  const amount = cdata.basePrice || cdata.escrow_value || cdata.totalCost || '0';
+  doc.font('Helvetica').fontSize(10).fillColor('#333').text(`Monto: ${amount} ${cdata.currency || 'USD'}`);
+  doc.text(`Vendedor: ${cdata.sellerName || ''}`);
+  doc.text(`Comprador: ${cdata.buyerName || ''}`);
+  doc.text(`Origen: ${cdata.originPort || ''} → Destino: ${cdata.destinationPort || ''}`);
+  doc.moveDown(0.5);
+
+  doc.font('Helvetica-Bold').fontSize(12).fillColor('#0B2545').text('Cláusulas');
+  doc.moveDown(0.2);
+  const clauses = [
+    '1. El presente contrato obliga a las partes según los términos aquí descritos.',
+    '2. El comprador debe efectuar el depósito según la modalidad pactada en el formulario.',
+    '3. La liberación de fondos será ejecutada mediante la función liberarPago() en el contrato inteligente una vez cumplidas las condiciones.',
+    '4. En caso de controversia, la parte ingenua podrá invocar abrirDisputa() para activar al árbitro.',
+    '5. El hash incluido certifica la inmutabilidad del acuerdo.'
+  ];
+  clauses.forEach(c => doc.font('Helvetica').fontSize(10).text(c, { align: 'justify', paragraphGap: 6 }));
+
+  doc.moveDown(0.8);
+  doc.font('Helvetica-Bold').fontSize(12).text('Instrucciones de Pago');
+  doc.moveDown(0.3);
+  // Incluir pseudo-función o enlace para pago
+  const payLink = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/pay?contract=${encodeURIComponent(contract.contract_id)}&party=${party}`;
+  doc.font('Helvetica').fontSize(10).text(`Para realizar el depósito, visite: ${payLink}`);
+  doc.moveDown(0.5);
+  doc.font('Helvetica').fontSize(10).text('También puede escanear el código QR para acceder al pago en su dispositivo móvil.');
+
+  // Generar QR simple con texto (PDFKit no incluye generador QR; indicamos cómo integrarlo externamente)
+  doc.moveDown(1);
+  doc.font('Helvetica-Bold').fontSize(10).text(`Documento para: ${party === 'seller' ? 'Vendedor/Proveedor' : 'Comprador/Cliente'}`);
 
   doc.end();
 });
